@@ -1,13 +1,17 @@
 import { Injectable } from "@nestjs/common"
 import { AddLikeDto, CreateCommentDto, CreatePostDto } from "@/posts/posts.dtos"
 import { PrismaService } from "@/prisma/prisma.service"
+import { ContentFactory } from "./factories/content.factory"
 
 @Injectable()
 export class PostsService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly contentFactory: ContentFactory,
+    ) {}
 
     create(data: CreatePostDto) {
-        return this.prisma.post.create({ data })
+        return this.contentFactory.createPost(data)
     }
 
     findAll() {
@@ -21,23 +25,10 @@ export class PostsService {
     }
 
     createComment(postId: number, data: CreateCommentDto) {
-        return this.prisma.comment.create({
-            data: {
-                postId,
-                content: data.content,
-                source: "service",
-            },
-        })
+        return this.contentFactory.createComment(postId, data)
     }
 
     addLike(postId: number, data: AddLikeDto) {
-        return this.prisma.like.create({
-            data: {
-                postId,
-                reactionType: data.reactionType || "like",
-                weight: data.weight || 1,
-                source: "service",
-            },
-        })
+        return this.contentFactory.createLike(postId, data)
     }
 }

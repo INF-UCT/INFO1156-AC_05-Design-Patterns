@@ -6,11 +6,16 @@ import { MostLikedFeedRankingStrategy } from "@/posts/feed/most-liked-feed-ranki
 import { RelevanceFeedRankingStrategy } from "@/posts/feed/relevance-feed-ranking.strategy"
 import { PostsController } from "@/posts/posts.controller"
 import { PostsService } from "@/posts/posts.service"
+import { ContentFactory, PrismaContentFactory } from "./factories/content.factory"
 
 @Module({
     controllers: [PostsController],
     providers: [
         PostsService,
+        {
+            provide: ContentFactory,
+            useClass: PrismaContentFactory,
+        },
         LatestFeedRankingStrategy,
         MostLikedFeedRankingStrategy,
         MostCommentedFeedRankingStrategy,
