@@ -12,6 +12,8 @@ import {
 import { CommentEntity } from "@/posts/entities/comment.entity"
 import { LikeEntity } from "@/posts/entities/like.entity"
 import { PostEntity } from "@/posts/entities/post.entity"
+import { FeedRankingStrategyResolver } from "@/posts/feed/feed-ranking-strategy.resolver"
+import { FeedRankingMode } from "@/posts/feed/feed-ranking.strategy"
 import { legacyModerationApi } from "@/posts/legacy-moderation.client"
 import { PrismaService } from "@/prisma/prisma.service"
 
@@ -46,6 +48,7 @@ export class PostsController {
     constructor(
         private readonly postsService: PostsService,
         private readonly prisma: PrismaService,
+        private readonly feedRankingStrategyResolver: FeedRankingStrategyResolver,
     ) {}
 
     @Post()
@@ -87,7 +90,7 @@ export class PostsController {
 
     @Get("feed")
     async getFeed(@Query() query: FeedQueryDto) {
-        const mode = query.mode || "latest"
+        const mode = (query.mode || "latest") as FeedRankingMode
 
         const posts = await this.prisma.post.findMany({
             include: {
@@ -137,35 +140,8 @@ export class PostsController {
             )
         })
 
-        let sorted = [...mappedPosts]
-
-        // Ranking inline por modo
-        // Esto define la forma de ordenar en base al filtro
-        switch (mode) {
-            case "latest":
-                sorted = sorted.sort(
-                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-                )
-                break
-            case "mostLiked":
-                sorted = sorted.sort((a, b) => b.likesCount - a.likesCount)
-                break
-            case "mostCommented":
-                sorted = sorted.sort(
-                    (a, b) => b.commentsCount - a.commentsCount,
-                )
-                break
-            case "relevance":
-                sorted = sorted.sort(
-                    (a, b) => b.relevanceScore - a.relevanceScore,
-                )
-                break
-            default:
-                sorted = sorted.sort(
-                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-                )
-                break
-        }
+        const sorted =
+            this.feedRankingStrategyResolver.resolve(mode).sort(mappedPosts)
 
         return {
             mode,
