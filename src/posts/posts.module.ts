@@ -6,6 +6,7 @@ import { MostLikedFeedRankingStrategy } from "@/posts/feed/most-liked-feed-ranki
 import { RelevanceFeedRankingStrategy } from "@/posts/feed/relevance-feed-ranking.strategy"
 import { PostsController } from "@/posts/posts.controller"
 import { PostsService } from "@/posts/posts.service"
+import { ModerationAdapter } from "@/posts/moderation.adapter"
 
 @Module({
     controllers: [PostsController],
@@ -16,6 +17,7 @@ import { PostsService } from "@/posts/posts.service"
         MostCommentedFeedRankingStrategy,
         RelevanceFeedRankingStrategy,
         FeedRankingStrategyResolver,
+        ModerationAdapter,
     ],
 })
 export class PostsModule {}

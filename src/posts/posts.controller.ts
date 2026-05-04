@@ -14,7 +14,7 @@ import { LikeEntity } from "@/posts/entities/like.entity"
 import { PostEntity } from "@/posts/entities/post.entity"
 import { FeedRankingStrategyResolver } from "@/posts/feed/feed-ranking-strategy.resolver"
 import { FeedRankingMode } from "@/posts/feed/feed-ranking.strategy"
-import { legacyModerationApi } from "@/posts/legacy-moderation.client"
+import { ModerationAdapter } from "@/posts/moderation.adapter"
 import { PrismaService } from "@/prisma/prisma.service"
 
 import { PostsService } from "@/posts/posts.service"
@@ -49,6 +49,7 @@ export class PostsController {
         private readonly postsService: PostsService,
         private readonly prisma: PrismaService,
         private readonly feedRankingStrategyResolver: FeedRankingStrategyResolver,
+        private readonly moderationAdapter: ModerationAdapter,
     ) {}
 
     @Post()
@@ -199,22 +200,10 @@ export class PostsController {
             throw new BadRequestException("Comment too short")
         }
 
-        // Cliente legacy: devuelve tipos mixtos (string/number/object).
-        const moderation = legacyModerationApi.review(body.content)
+        // Cliente adaptado: retorna un booleano claro usando el patrón Adapter.
+        const isApproved = this.moderationAdapter.review(body.content)
 
-        let blocked = false
-
-        if (moderation === "BLOCK") {
-            blocked = true
-        } else if (typeof moderation === "number") {
-            blocked = moderation < 1
-        } else if (typeof moderation === "object") {
-            blocked = !("pass" in moderation && moderation.pass)
-        } else if (moderation === "OK") {
-            blocked = false
-        }
-
-        if (blocked) {
+        if (!isApproved) {
             throw new BadRequestException("Comment blocked by moderation")
         }
 
@@ -238,7 +227,7 @@ export class PostsController {
             created.content.length > 60 ? 80 : 40,
             false,
             "es",
-            { moderation, source: "legacy" },
+            { source: "legacy" },
         )
 
         logDomainEvent("comment.created", { postId: id, commentId: created.id })
