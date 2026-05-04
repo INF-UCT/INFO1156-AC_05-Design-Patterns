@@ -12,8 +12,8 @@ import {
 import { CommentEntity } from "@/posts/entities/comment.entity"
 import { LikeEntity } from "@/posts/entities/like.entity"
 import { PostEntity } from "@/posts/entities/post.entity"
-import { legacyModerationApi } from "@/posts/legacy-moderation.client"
 import { PrismaService } from "@/prisma/prisma.service"
+import { IModerationService } from "@/posts/interfaces/moderation.interface"
 
 import { PostsService } from "@/posts/posts.service"
 import {
@@ -49,7 +49,8 @@ export class PostsController {
     constructor(
         private readonly postsService: PostsService,
         private readonly prisma: PrismaService,
-    ) { }
+        private readonly moderationService: IModerationService,
+    ) {}
 
     @Post()
     async create(@Body() body: CreatePostDto) {
@@ -201,24 +202,13 @@ export class PostsController {
             throw new BadRequestException("Comment too short")
         }
 
-        // Cliente legacy: devuelve tipos mixtos (string/number/object).
-        const moderation = legacyModerationApi.review(body.content)
+        const moderationResult = this.moderationService.review(body.content)
 
-        let blocked = false
-
-        if (moderation === "BLOCK") {
-            blocked = true
-        } else if (typeof moderation === "number") {
-            blocked = moderation < 1
-        } else if (typeof moderation === "object") {
-            blocked = !("pass" in moderation && moderation.pass)
-        } else if (moderation === "OK") {
-            blocked = false
-        }
-
-        if (blocked) {
+        if (moderationResult.isBlocked) {
             throw new BadRequestException("Comment blocked by moderation")
         }
+
+        const moderation = moderationResult.rawResult
 
         // Se persiste la información en la base de datos
         const created = await this.prisma.comment.create({
