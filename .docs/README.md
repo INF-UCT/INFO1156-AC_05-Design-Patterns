@@ -49,8 +49,32 @@ const sorted =
     this.feedRankingStrategyResolver.resolve(mode).sort(mappedPosts)
 ```
 
+## Abstract Factory para Creación de Contenido
+
+### Problema identificado
+
+El servicio principal de posts (`PostsService`) estaba creando las diferentes entidades, que conforman el contenido de las publicaciones (posts, comentarios y likes), interactuando directamente con el ORM de persistencia (`PrismaService`). Esto acoplaba al servicio con la implementación de base de datos y dificultaba extender el comportamiento a futuro.
+
+### Patron aplicado
+
+Se aplicó el patron **Abstract Factory** (patrón creacional), bajo la máxima simplicidad para facilitar la lectura. Se generó una familia de creación en `src/posts/factories/content.factory.ts`:
+
+- Una clase abstracta `ContentFactory` (define el contrato de creación).
+- Una implementación concreta `PrismaContentFactory` (contiene la lógica usando Prima).
+
+### Resultado
+
+Se inyecta la fábrica abstracta en el `PostsService` reemplazando los llamados directos y centralizando la lógica de creación sin modificar el exterior:
+
+```ts
+create(data: CreatePostDto) {
+    return this.contentFactory.createPost(data)
+}
+```
+
 Con esto, `PostsController` queda menos acoplado a las reglas de ranking. Si en
 el futuro se agrega un nuevo modo de feed, se puede crear una nueva estrategia y
+<<<<<<< HEAD
 registrarla en el modulo sin reescribir la logica del endpoint.
 
 -----------------------------------------------------------------------------------------------------------
@@ -95,3 +119,6 @@ if (!isApproved) {
 De esta forma, en caso de que a futuro cambien la lógica o servicio de la moderación heredada, solo se tendrá que modificar el `ModerationAdapter` y el controlador no se verá afectado.
 
 
+=======
+registrarla en el modulo sin reescribir la logica del endpoint.-
+>>>>>>> cc5b559b2ab5e9ccd5be25f074c1e57c7247bbd4
