@@ -1,6 +1,9 @@
+import { Injectable } from "@nestjs/common"
 import { legacyModerationApi } from "./legacy-moderation.client"
+import { IModerationService } from "./interfaces/moderation.interface"
 
-export class LegacyModerationAdapter {
+@Injectable()
+export class LegacyModerationAdapter implements IModerationService {
     review(content: string) {
         const rawResult = legacyModerationApi.review(content)
 

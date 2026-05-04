@@ -12,8 +12,8 @@ import {
 import { CommentEntity } from "@/posts/entities/comment.entity"
 import { LikeEntity } from "@/posts/entities/like.entity"
 import { PostEntity } from "@/posts/entities/post.entity"
-import { LegacyModerationAdapter } from "@/posts/legacy-moderation.adapter"
 import { PrismaService } from "@/prisma/prisma.service"
+import { IModerationService } from "@/posts/interfaces/moderation.interface"
 
 import { PostsService } from "@/posts/posts.service"
 import {
@@ -46,6 +46,7 @@ export class PostsController {
     constructor(
         private readonly postsService: PostsService,
         private readonly prisma: PrismaService,
+        private readonly moderationService: IModerationService,
     ) {}
 
     @Post()
@@ -223,8 +224,7 @@ export class PostsController {
             throw new BadRequestException("Comment too short")
         }
 
-        const moderationAdapter = new LegacyModerationAdapter()
-        const moderationResult = moderationAdapter.review(body.content)
+        const moderationResult = this.moderationService.review(body.content)
 
         if (moderationResult.isBlocked) {
             throw new BadRequestException("Comment blocked by moderation")
