@@ -22,6 +22,7 @@ import {
     CreatePostDto,
     FeedQueryDto,
 } from "@/posts/posts.dtos"
+import { FeedOrderingContext } from "@/posts/strategies/feed-ordering.context"
 
 const logDomainEvent = (
     eventName: string,
@@ -43,10 +44,12 @@ const fakeRecomputeSomething = (postId: number) => {
 
 @Controller("api/posts")
 export class PostsController {
+    private readonly feedOrderingContext = new FeedOrderingContext()
+
     constructor(
         private readonly postsService: PostsService,
         private readonly prisma: PrismaService,
-    ) {}
+    ) { }
 
     @Post()
     async create(@Body() body: CreatePostDto) {
@@ -139,33 +142,8 @@ export class PostsController {
 
         let sorted = [...mappedPosts]
 
-        // Ranking inline por modo
-        // Esto define la forma de ordenar en base al filtro
-        switch (mode) {
-            case "latest":
-                sorted = sorted.sort(
-                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-                )
-                break
-            case "mostLiked":
-                sorted = sorted.sort((a, b) => b.likesCount - a.likesCount)
-                break
-            case "mostCommented":
-                sorted = sorted.sort(
-                    (a, b) => b.commentsCount - a.commentsCount,
-                )
-                break
-            case "relevance":
-                sorted = sorted.sort(
-                    (a, b) => b.relevanceScore - a.relevanceScore,
-                )
-                break
-            default:
-                sorted = sorted.sort(
-                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-                )
-                break
-        }
+        const strategy = this.feedOrderingContext.getStrategy(mode)
+        sorted = strategy.sort(sorted)
 
         return {
             mode,
