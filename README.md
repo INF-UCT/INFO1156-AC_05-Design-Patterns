@@ -49,3 +49,60 @@ Comandos útiles:
 
 - `make stop` para detener el contenedor
 - `make logs` para ver logs en tiempo real
+
+---
+
+# Refactorización de arquitectura y patrones de diseño
+
+Este documento detalla las decisiones arquitectónicas y la implementación de patrones de diseño aplicadas durante la refactorización del proyecto. El objetivo principal de estos cambios es mejorar la mantenibilidad, escalabilidad y legibilidad del código.
+
+## Patrones de diseño aplicados
+
+### 1. Patrón Adapter (Adaptador) para `Legacy Moderation Client`
+
+- **Fundamento:** En sistemas que evolucionan constantemente, es muy común tener que interactuar con servicios heredados (legacy) o librerías de terceros que manejan interfaces incompatibles con nuestros nuevos estándares. El patrón Adapter nos permite envolver el `Legacy Moderation Client` para que cumpla con una interfaz moderna y limpia que nuestro dominio comprende a la perfección, aislando así el código antiguo del resto del ecosistema.
+- **Implementación:**
+  Definimos una interfaz propia en nuestro dominio (`IModerationService` con un método `review()`). Luego, creamos la clase `LegacyModerationAdapter`, la cual implementa esta interfaz y se inyecta directamente al controlador mediante Inyección de Dependencias. Internamente, el adaptador recibe la llamada, la traduce al formato que el cliente heredado exige, y finalmente mapea la respuesta a un formato estructurado y predecible (`{ isBlocked, rawResult }`). De esta manera, el controlador queda limpio y dependiendo únicamente de la abstracción.
+
+### 2. Patrón Builder (Constructor) para las entidades
+
+- **Fundamento:** Las entidades principales de la aplicación (como `PostEntity`) tienden a crecer en complejidad, requiriendo cada vez más parámetros opcionales y reglas de validación durante su creación. Si utilizamos constructores tradicionales, caemos rápidamente en el "anti-patrón de constructor telescópico", dando como resultado inicializaciones enormes y muy difíciles de leer (como ocurre al tener constructores con 14 parámetros). El patrón Builder nos permite ensamblar estos objetos complejos paso a paso, volviendo el código mucho más declarativo y limpio.
+- **Implementación:**
+  Creamos una clase `PostBuilder` que expone métodos fluidos (chaining) para cada uno de los atributos de la entidad, por ejemplo: `.withTitle(title)`, `.withContent(content)` y `.withLikesCount(count)`. Cada método devuelve la instancia actual del builder (`this`), permitiendo encadenar llamadas de forma continua. Al final, un método `.build()` se encarga de instanciar la entidad definitiva reuniendo toda la configuración provista.
+
+### 3. Patrón Strategy (Estrategia) para el ordenamiento del feed
+
+- **Fundamento:** El ordenamiento del feed (recientes, más votados, más comentados, relevancia) varía dinámicamente según el parámetro `mode` que solicite el usuario en la petición. Si intentamos resolver esto apilando múltiples bloques `if/else` o un gran `switch` dentro del controlador, estaríamos rompiendo el principio Open/Closed. Esto hace que el código se vuelva frágil y muy tedioso de modificar si el día de mañana surgen nuevas formas de ordenamiento. Strategy nos permite extraer y encapsular estas distintas lógicas en familias de algoritmos independientes e intercambiables.
+- **Implementación:**
+  Definimos una interfaz común `FeedOrderingStrategy` que cuenta con el método `sort()`. A partir de ella, creamos las distintas clases concretas (ej. `LatestOrderingStrategy`, `MostLikedOrderingStrategy`). En el controlador, en lugar de evaluar condiciones, simplemente delegamos la decisión a un contexto (`FeedOrderingContext`). Este contexto es el encargado de devolvernos la estrategia correcta en base al parámetro recibido, para luego ejecutar la ordenación. Así, el controlador mantiene una única responsabilidad y su lectura es lineal.
+
+---
+
+## Patrones evaluados pero no aplicados
+
+Durante la fase de diseño consideramos otras alternativas, pero decidimos descartarlas a favor de soluciones más alineadas a las necesidades inmediatas del proyecto. A continuación detallamos los motivos:
+
+### 1. Patrón Observer (Observador) para `Post Controller`
+
+- **Posible implementación:** Podríamos haberlo utilizado para emitir un evento cada vez que se creara una publicación o una interacción (likes, comentarios), notificando así a múltiples observadores (sistemas de logging, envío de notificaciones o tareas en segundo plano) para que reaccionen a dicho evento.
+- **Motivo de descarte:** Si bien Observer es un patrón excelente para aislar efectos secundarios asíncronos (como `fakeSendNotification` o `logDomainEvent`), el problema estructural de mayor urgencia en nuestro controlador era **gestionar la variabilidad del comportamiento principal** (es decir, el ordenamiento). El patrón _Strategy_ atacó de lleno la alta complejidad ciclomática del flujo central, aportando un valor inmediato a la mantenibilidad del código. Implementar Observer habría añadido una capa extra de eventos (pub/sub) que, aunque interesante a futuro, no iba a solucionar los gigantescos bloques lógicos del feed.
+
+### 2. Patrón Facade (Fachada) para `Post Controller` y `Post Service`
+
+- **Posible implementación:** Consistiría en crear una clase `PostFacade` que agrupara las llamadas hacia el `PostService` y hacia el servicio de moderación, ofreciendo una única función de alto nivel (como `createAndModeratePost()`) lista para ser consumida por el controlador.
+- **Motivo de descarte:** Al utilizar una arquitectura dividida por capas (Controlador -> Servicio -> Repositorio), el Servicio _ya actúa de forma inherente_ como una fachada para nuestra lógica de negocio. Introducir otra Fachada adicional entre el controlador y el servicio solo hubiese sumado una capa de abstracción redundante. Decidimos emplear el patrón **Adapter** para controlar la complejidad externa (el servicio heredado de moderación), aislando esa "toxicidad" específica en lugar de intentar esconderla burdamente detrás de un Facade genérico.
+
+### 3. Patrón Factory (Fábrica) para `PrismaService`
+
+- **Posible implementación:** Implicaría diseñar una clase `PrismaFactory` que se encargase de instanciar la conexión a la base de datos, configurando parámetros de conexión dinámicos dependiendo del entorno o contexto de ejecución.
+- **Motivo de descarte:** Herramientas modernas como Prisma ORM, en conjunto con NestJS, gestionan el cliente de base de datos directamente como un **Singleton** inyectable. No existe la necesidad de crear dinámicamente múltiples familias de clientes ni de instanciarlos de forma repetida. Lo que el proyecto requiere es un único pool de conexiones que el propio ciclo de vida del framework ya sabe compartir y administrar. Por lo tanto, forzar el uso de Factory aquí solo hubiera añadido complejidad innecesaria a un problema que NestJS resuelve de forma nativa.
+
+---
+
+## Conclusión de la arquitectura
+
+La decisión de priorizar **Adapter**, **Builder** y **Strategy** por sobre Observer, Facade y Factory se basó completamente en atacar los verdaderos cuellos de botella de nuestro dominio:
+
+1. **Adapter** elimina de raíz el fuerte acoplamiento que teníamos con el sistema de moderación heredado (un problema de incompatibilidad que un Facade no llega a solucionar a nivel estricto de interfaces).
+2. **Builder** viene a darnos una solución elegante a la dificultad (y pésima legibilidad) que supone instanciar entidades masivas atestadas de parámetros.
+3. **Strategy** exprime el polimorfismo para destruir la complejidad ciclomática y los bloques condicionales pesados asociados al ordenamiento del feed, priorizando la solidez de la lógica principal por encima de la gestión de efectos secundarios que nos ofrecía Observer.
