@@ -9,9 +9,9 @@ import {
     Post,
     Query,
 } from "@nestjs/common"
-import { CommentEntity } from "@/posts/entities/comment.entity"
-import { LikeEntity } from "@/posts/entities/like.entity"
-import { PostEntity } from "@/posts/entities/post.entity"
+import { PostEntityBuilder } from "@/posts/builders/post.entity.builder"
+import { CommentEntityBuilder } from "@/posts/builders/comment.entity.builder"
+import { LikeEntityBuilder } from "@/posts/builders/like.entity.builder"
 import { PrismaService } from "@/prisma/prisma.service"
 import { IModerationService } from "@/posts/interfaces/moderation.interface"
 
@@ -101,44 +101,18 @@ export class PostsController {
         })
 
         const mappedPosts = posts.map((post) => {
-            const likesCount = post.likes.reduce(
-                (sum, like) => sum + like.weight,
-                0,
-            )
-            const commentsCount = post.comments.length
-            // 36_000_00 = 1 hora en milisegundos.
-            const hoursSinceCreated =
-                (Date.now() - new Date(post.createdAt).getTime()) / 36_000_00
-            const relevanceScore =
-                likesCount * 2 +
-                commentsCount * 3 -
-                Math.floor(hoursSinceCreated)
-
-            const tags = post.title.split(" ").filter((word) => word.length > 4)
-            const metadata = {
-                likesWeights: post.likes.map((like) => like.weight),
-                commentLengths: post.comments.map(
-                    (comment) => comment.content.length,
-                ),
-                hourOfCreate: new Date(post.createdAt).getHours(),
-            }
-
-            return new PostEntity(
-                post.id,
-                post.title,
-                post.description,
-                post.imageUrl,
-                post.createdAt,
-                post.updatedAt,
-                likesCount,
-                commentsCount,
-                relevanceScore,
-                relevanceScore > 20,
-                "feed-controller",
-                tags,
-                metadata,
-                mode,
-            )
+            return new PostEntityBuilder()
+                .setId(post.id)
+                .setTitle(post.title)
+                .setDescription(post.description)
+                .setImageUrl(post.imageUrl)
+                .setDates(post.createdAt, post.updatedAt)
+                .calculateCounts(post.likes, post.comments)
+                .calculateRelevance(post.createdAt)
+                .calculateTags(post.title)
+                .calculateMetadata(post.likes, post.comments)
+                .setRankingMode(mode)
+                .build()
         })
 
         let sorted = [...mappedPosts]
@@ -165,22 +139,19 @@ export class PostsController {
             orderBy: { createdAt: "desc" },
         })
 
-        const entities = comments.map(
-            (comment) =>
-                new CommentEntity(
-                    comment.id,
-                    comment.postId,
-                    comment.content,
-                    comment.createdAt,
-                    comment.updatedAt,
-                    comment.source,
-                    "approved",
-                    comment.content.length > 80 ? 70 : 45,
-                    comment.content.length % 2 === 0,
-                    "es",
-                    { chars: comment.content.length, source: comment.source },
-                ),
-        )
+        const entities = comments.map((comment) => {
+            return new CommentEntityBuilder()
+                .setId(comment.id)
+                .setPostId(comment.postId)
+                .setContent(comment.content)
+                .setDates(comment.createdAt, comment.updatedAt)
+                .setSource(comment.source)
+                .setModerationState("approved")
+                .calculateSentimentScore(comment.content.length, 80)
+                .calculateIsPinned(comment.content.length)
+                .setMetadata({ chars: comment.content.length, source: comment.source })
+                .build()
+        })
 
         return {
             total_comments: entities.length,
@@ -219,19 +190,17 @@ export class PostsController {
             },
         })
 
-        const entity = new CommentEntity(
-            created.id,
-            created.postId,
-            created.content,
-            created.createdAt,
-            created.updatedAt,
-            created.source,
-            "approved",
-            created.content.length > 60 ? 80 : 40,
-            false,
-            "es",
-            { moderation, source: "legacy" },
-        )
+        const entity = new CommentEntityBuilder()
+            .setId(created.id)
+            .setPostId(created.postId)
+            .setContent(created.content)
+            .setDates(created.createdAt, created.updatedAt)
+            .setSource(created.source)
+            .setModerationState("approved")
+            .calculateSentimentScore(created.content.length, 60)
+            .setIsPinned(false)
+            .setMetadata({ moderation, source: "legacy" })
+            .build()
 
         logDomainEvent("comment.created", { postId: id, commentId: created.id })
         fakeSendNotification("comment", { postId: id })
@@ -269,17 +238,16 @@ export class PostsController {
             },
         })
 
-        const entity = new LikeEntity(
-            like.id,
-            like.postId,
-            like.reactionType,
-            like.weight,
-            like.source,
-            like.createdAt,
-            like.weight > 2 ? "strong" : "normal",
-            true,
-            { from: "manual", r: like.reactionType },
-        )
+        const entity = new LikeEntityBuilder()
+            .setId(like.id)
+            .setPostId(like.postId)
+            .setReactionType(reactionType)
+            .setWeight(weight)
+            .setSource("controller")
+            .setCreatedAt(like.createdAt)
+            .calculateStrengthLabel()
+            .setMetadata({ from: "manual", r: reactionType })
+            .build()
 
         logDomainEvent("like.created", { postId: id, likeId: like.id })
         fakeSendNotification("like", { postId: id, reactionType })
