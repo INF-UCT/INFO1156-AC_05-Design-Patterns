@@ -4,7 +4,7 @@ export interface ModerationResult {
 }
 
 export class ModerationAdapter {
-    adapt(raw: string | number | object | null): ModerationResult {
+    adapt(raw: string | number | object): ModerationResult {
         if (raw === "BLOCK") {
             return { approved: false, reason: "legacy-block" }
         }
@@ -19,18 +19,10 @@ export class ModerationAdapter {
 
         if (typeof raw === "object" && raw !== null) {
             const obj = raw as Record<string, unknown>
-
-            const pass = obj.pass
-            const reason = obj.reason
-
-            return {
-                approved: pass === true,
-                reason: typeof reason === "string" ? reason : undefined
-            }
+            const pass = obj.pass as boolean | undefined
+            return { approved: pass === true, reason: obj.reason as string }
         }
 
         return { approved: true }
     }
 }
-
-#para subirlooo siisisis 
