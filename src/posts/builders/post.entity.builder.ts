@@ -1,12 +1,12 @@
 ﻿import { PostEntity } from "@/posts/entities/post.entity"
 
 export class PostEntityBuilder {
-    private id: number
-    private title: string
-    private description: string
-    private imageUrl: string
-    private createdAt: Date
-    private updatedAt: Date
+    private id!: number
+    private title!: string
+    private description!: string
+    private imageUrl!: string
+    private createdAt!: Date
+    private updatedAt!: Date
     private likesCount = 0
     private commentsCount = 0
     private relevanceScore = 0
@@ -14,7 +14,7 @@ export class PostEntityBuilder {
     private source = "feed-controller"
     private tags: string[] = []
     private metadata: Record<string, unknown> = {}
-    private rankingMode: string
+    private rankingMode!: string
 
     setId(id: number): this {
         this.id = id

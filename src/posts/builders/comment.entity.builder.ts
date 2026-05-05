@@ -1,15 +1,15 @@
 ﻿import { CommentEntity } from "@/posts/entities/comment.entity"
 
 export class CommentEntityBuilder {
-    private id: number
-    private postId: number
-    private content: string
-    private createdAt: Date
-    private updatedAt: Date
-    private source: string
+    private id!: number
+    private postId!: number
+    private content!: string
+    private createdAt!: Date
+    private updatedAt!: Date
+    private source!: string
     private moderationState = "approved"
-    private sentimentScore: number
-    private isPinned: boolean
+    private sentimentScore!: number
+    private isPinned!: boolean
     private language = "es"
     private metadata: Record<string, unknown> = {}
 

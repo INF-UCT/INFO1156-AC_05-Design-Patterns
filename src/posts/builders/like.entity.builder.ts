@@ -1,15 +1,15 @@
 ﻿import { LikeEntity } from "@/posts/entities/like.entity"
 
 export class LikeEntityBuilder {
-    private id: number
-    private postId: number
-    private reactionType: string
-    private weight: number
-    private source: string
-    private createdAt: Date
-    private strengthLabel: string
+    private id!: number
+    private postId!: number
+    private reactionType!: string
+    private weight!: number
+    private source!: string
+    private createdAt!: Date
+    private strengthLabel!: string
     private shouldAffectRelevanceScore = true
-    private metadata: Record<string, unknown> = {}
+    private metadata!: Record<string, unknown> = {}
 
     setId(id: number): this
     { this.id = id; return this }
