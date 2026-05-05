@@ -76,6 +76,12 @@ Este documento detalla las decisiones arquitectónicas y la implementación de p
 - **Implementación:**
   Definimos una interfaz común `FeedOrderingStrategy` que cuenta con el método `sort()`. A partir de ella, creamos las distintas clases concretas (ej. `LatestOrderingStrategy`, `MostLikedOrderingStrategy`). En el controlador, en lugar de evaluar condiciones, simplemente delegamos la decisión a un contexto (`FeedOrderingContext`). Este contexto es el encargado de devolvernos la estrategia correcta en base al parámetro recibido, para luego ejecutar la ordenación. Así, el controlador mantiene una única responsabilidad y su lectura es lineal.
 
+### 4. Patrón Factory (Fábrica) para la instanciación de `PrismaService`
+
+- **Fundamento:** A pesar de que NestJS maneja instancias en forma de Singleton de manera excelente, la configuración de la conexión a la base de datos a menudo requiere una lógica condicional basada en el entorno (como cambiar entre la base de datos de testing y la de desarrollo/producción). Si dejamos esta lógica de selección embebida directamente dentro de la clase de servicio, ensuciamos su propósito y violamos el principio de Responsabilidad Única.
+- **Implementación:**
+  Creamos una clase `PrismaClientFactory` con un método estático `create(environment)`. Esta fábrica evalúa el entorno de ejecución actual, selecciona qué archivo de base de datos usar (`test.db` o `sqlite.db`), construye las opciones del adaptador `PrismaLibSql` y retorna la instancia del `PrismaService` lista para ser usada. Finalmente, en el módulo de NestJS (`PrismaModule`), utilizamos un `useFactory` para registrar este servicio. Así extraemos toda la lógica compleja de creación y selección fuera del cliente en sí.
+
 ---
 
 ## Patrones evaluados pero no aplicados
@@ -92,17 +98,13 @@ Durante la fase de diseño consideramos otras alternativas, pero decidimos desca
 - **Posible implementación:** Consistiría en crear una clase `PostFacade` que agrupara las llamadas hacia el `PostService` y hacia el servicio de moderación, ofreciendo una única función de alto nivel (como `createAndModeratePost()`) lista para ser consumida por el controlador.
 - **Motivo de descarte:** Al utilizar una arquitectura dividida por capas (Controlador -> Servicio -> Repositorio), el Servicio _ya actúa de forma inherente_ como una fachada para nuestra lógica de negocio. Introducir otra Fachada adicional entre el controlador y el servicio solo hubiese sumado una capa de abstracción redundante. Decidimos emplear el patrón **Adapter** para controlar la complejidad externa (el servicio heredado de moderación), aislando esa "toxicidad" específica en lugar de intentar esconderla burdamente detrás de un Facade genérico.
 
-### 3. Patrón Factory (Fábrica) para `PrismaService`
-
-- **Posible implementación:** Implicaría diseñar una clase `PrismaFactory` que se encargase de instanciar la conexión a la base de datos, configurando parámetros de conexión dinámicos dependiendo del entorno o contexto de ejecución.
-- **Motivo de descarte:** Herramientas modernas como Prisma ORM, en conjunto con NestJS, gestionan el cliente de base de datos directamente como un **Singleton** inyectable. No existe la necesidad de crear dinámicamente múltiples familias de clientes ni de instanciarlos de forma repetida. Lo que el proyecto requiere es un único pool de conexiones que el propio ciclo de vida del framework ya sabe compartir y administrar. Por lo tanto, forzar el uso de Factory aquí solo hubiera añadido complejidad innecesaria a un problema que NestJS resuelve de forma nativa.
-
 ---
 
 ## Conclusión de la arquitectura
 
-La decisión de priorizar **Adapter**, **Builder** y **Strategy** por sobre Observer, Facade y Factory se basó completamente en atacar los verdaderos cuellos de botella de nuestro dominio:
+La decisión de implementar **Adapter**, **Builder**, **Strategy** y **Factory** por sobre Observer o Facade se basó completamente en atacar los verdaderos cuellos de botella de nuestro dominio:
 
 1. **Adapter** elimina de raíz el fuerte acoplamiento que teníamos con el sistema de moderación heredado (un problema de incompatibilidad que un Facade no llega a solucionar a nivel estricto de interfaces).
 2. **Builder** viene a darnos una solución elegante a la dificultad (y pésima legibilidad) que supone instanciar entidades masivas atestadas de parámetros.
 3. **Strategy** exprime el polimorfismo para destruir la complejidad ciclomática y los bloques condicionales pesados asociados al ordenamiento del feed, priorizando la solidez de la lógica principal por encima de la gestión de efectos secundarios que nos ofrecía Observer.
+4. **Factory** encapsula la complejidad de instanciar un servicio de base de datos multi-entorno, separando inteligentemente la lógica de _creación_ de la lógica de _uso_ y permitiendo mantener nuestro código modular frente a múltiples configuraciones.
