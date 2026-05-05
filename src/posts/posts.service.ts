@@ -9,6 +9,7 @@ export class PostsService {
     create(data: CreatePostDto) {
         return this.prisma.post.create({ data })
     }
+
     findAll() {
         return this.prisma.post.findMany({
             orderBy: { createdAt: "desc" },
