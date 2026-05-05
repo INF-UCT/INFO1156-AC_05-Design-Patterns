@@ -9,7 +9,7 @@ export class LikeEntityBuilder {
     private createdAt!: Date
     private strengthLabel!: string
     private shouldAffectRelevanceScore = true
-    private metadata!: Record<string, unknown> = {}
+    private metadata: Record<string, unknown> = {}
 
     setId(id: number): this
     { this.id = id; return this }
