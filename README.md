@@ -82,6 +82,12 @@ Este documento detalla las decisiones arquitectónicas y la implementación de p
 - **Implementación:**
   Creamos una interfaz `DomainEvent` y `EventObserver`. Luego, implementamos observadores concretos (`LoggerObserver`, `NotificationObserver`, `RecomputeObserver`) que reaccionan a los eventos. El `DomainEventPublisher` actúa como el sujeto (Subject), manteniendo una lista de observadores y notificándoles cuando se publica un evento mediante el método `publish()`. En el controlador, simplemente se inyecta el Publisher y se llama a `publish()` con el tipo de evento y el payload, eliminando la lógica de invocación manual.
 
+### 5. Patrón Factory (Fábrica) para la instanciación de PrismaService
+Fundamento: A pesar de que NestJS maneja instancias en forma de Singleton de manera excelente, la configuración de la conexión a la base de datos a menudo requiere una lógica condicional basada en el entorno (como cambiar entre la base de datos de testing y la de desarrollo/producción). Si dejamos esta lógica de selección embebida directamente dentro de la clase de servicio, ensuciamos su propósito y violamos el principio de Responsabilidad Única.
+Implementación: Creamos una clase PrismaClientFactory con un método estático create(environment). Esta fábrica evalúa el entorno de ejecución actual, selecciona qué archivo de base de datos usar (test.db o sqlite.db), construye las opciones del adaptador PrismaLibSql y retorna la instancia del PrismaService lista para ser usada. Finalmente, en el módulo de NestJS (PrismaModule), utilizamos un useFactory para registrar este servicio. Así extraemos toda la lógica compleja de creación y selección fuera del cliente en sí.
+
+
+
 ---
 
 ## Patrones evaluados pero no aplicados
