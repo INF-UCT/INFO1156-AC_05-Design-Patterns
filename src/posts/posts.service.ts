@@ -1,43 +1,26 @@
-import { Injectable } from "@nestjs/common"
-import { AddLikeDto, CreateCommentDto, CreatePostDto } from "@/posts/posts.dtos"
-import { PrismaService } from "@/prisma/prisma.service"
+// src/posts/posts.service.ts
+import { Injectable, Inject, BadRequestException } from '@nestjs/common';
+import { ContentModerator, CONTENT_MODERATOR_TOKEN } from './moderation.interface';
+import { CreatePostDto } from './posts.dtos';
 
 @Injectable()
 export class PostsService {
-    constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(CONTENT_MODERATOR_TOKEN)
+    private readonly moderator: ContentModerator,
+  ) {}
 
-    create(data: CreatePostDto) {
-        return this.prisma.post.create({ data })
+  public async createPost(dto: CreatePostDto) {
+    // 1. Moderamos tanto el título como la descripción
+    const isTitleSafe = await this.moderator.moderateContent(dto.title);
+    const isDescriptionSafe = await this.moderator.moderateContent(dto.description);
+
+    // 2. Si alguno de los dos no pasa la moderación, bloqueamos la creación
+    if (!isTitleSafe || !isDescriptionSafe) {
+      throw new BadRequestException('El contenido no pasó la moderación.');
     }
 
-    findAll() {
-        return this.prisma.post.findMany({
-            orderBy: { createdAt: "desc" },
-        })
-    }
-
-    findById(id: number) {
-        return this.prisma.post.findUnique({ where: { id } })
-    }
-
-    createComment(postId: number, data: CreateCommentDto) {
-        return this.prisma.comment.create({
-            data: {
-                postId,
-                content: data.content,
-                source: "service",
-            },
-        })
-    }
-
-    addLike(postId: number, data: AddLikeDto) {
-        return this.prisma.like.create({
-            data: {
-                postId,
-                reactionType: data.reactionType || "like",
-                weight: data.weight || 1,
-                source: "service",
-            },
-        })
-    }
+    // 3. Lógica para guardar en la base de datos...
+    return { message: 'Post creado con éxito' };
+  }
 }

@@ -17,3 +17,58 @@ export class PostEntity {
         public rankingMode: string,
     ) {}
 }
+
+export class PostBuilder {
+    private id!: number;
+    private title!: string;
+    private description!: string;
+    private imageUrl!: string;
+    private createdAt!: Date;
+    private updatedAt!: Date;
+    private likesCount!: number;
+    private commentsCount!: number;
+    private relevanceScore!: number;
+    private isFeatured!: boolean;
+    private source!: string;
+    private tags!: string[];
+    private metadata!: Record<string, unknown>;
+    private rankingMode!: string;
+
+    setId(id: number): this { this.id = id; return this; }
+    setTitle(title: string): this { this.title = title; return this; }
+    setDescription(description: string): this { this.description = description; return this; }
+    setImageUrl(imageUrl: string): this { this.imageUrl = imageUrl; return this; }
+    setCreatedAt(createdAt: Date): this { this.createdAt = createdAt; return this; }
+    setUpdatedAt(updatedAt: Date): this { this.updatedAt = updatedAt; return this; }
+    setLikesCount(likesCount: number): this { this.likesCount = likesCount; return this; }
+    setCommentsCount(commentsCount: number): this { this.commentsCount = commentsCount; return this; }
+    setRelevanceScore(relevanceScore: number): this { this.relevanceScore = relevanceScore; return this; }
+    setIsFeatured(isFeatured: boolean): this { this.isFeatured = isFeatured; return this; }
+    setSource(source: string): this { this.source = source; return this; }
+    setTags(tags: string[]): this { this.tags = tags; return this; }
+    setMetadata(metadata: Record<string, unknown>): this { this.metadata = metadata; return this; }
+    setRankingMode(rankingMode: string): this { this.rankingMode = rankingMode; return this; }
+
+    build(): PostEntity {
+        if (this.id === undefined || !this.title) {
+            throw new Error("PostEntity requires at least id and title")
+        }
+        
+        return new PostEntity(
+            this.id,
+            this.title,
+            this.description,
+            this.imageUrl,
+            this.createdAt,
+            this.updatedAt,
+            this.likesCount,
+            this.commentsCount,
+            this.relevanceScore,
+            this.isFeatured,
+            this.source,
+            this.tags,
+            this.metadata,
+            this.rankingMode,
+        );
+    }
+}
