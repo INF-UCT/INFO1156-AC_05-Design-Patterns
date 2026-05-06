@@ -3,17 +3,18 @@ import {
     Body,
     Controller,
     Get,
-    NotFoundException,
     Param,
     ParseIntPipe,
     Post,
     Query,
+    NotFoundException,
 } from "@nestjs/common"
+
 import { EntityFactory } from "@/posts/entities/entity.factory"
 import { legacyModerationApi } from "@/posts/legacy-moderation.client"
 import { PrismaService } from "@/prisma/prisma.service"
-
 import { PostsService } from "@/posts/posts.service"
+
 import {
     AddLikeDto,
     CreateCommentDto,
@@ -21,29 +22,11 @@ import {
     FeedQueryDto,
 } from "@/posts/posts.dtos"
 
-const logDomainEvent = (
-    eventName: string,
-    payload: Record<string, unknown>,
-) => {
-    console.log(`[event:${eventName}]`, payload)
-}
-
-const fakeSendNotification = (
-    type: string,
-    payload: Record<string, unknown>,
-) => {
-    console.log(`[notify:${type}]`, payload)
-}
-
-const fakeRecomputeSomething = (postId: number) => {
-    console.log(`[recompute] postId=${postId}`)
-}
-
 @Controller("api/posts")
 export class PostsController {
     constructor(
-        private readonly postsService: PostsService,
         private readonly prisma: PrismaService,
+        private readonly postsService: PostsService,
     ) {}
 
     @Post()
@@ -58,28 +41,34 @@ export class PostsController {
             throw new BadRequestException("Image URL must start with http")
         }
 
-        const created = await this.postsService.create(body)
-
-        logDomainEvent("post.created", {
-            postId: created.id,
-            title: created.title,
+        const created = await this.prisma.post.create({
+            data: body,
         })
-        fakeSendNotification("post", { postId: created.id })
-        fakeRecomputeSomething(created.id)
+
+        const entity = EntityFactory.createPost(created, "latest")
 
         return {
             ok: true,
-            payload: created,
+            payload: entity,
         }
     }
 
     @Get()
     async findAll() {
-        const posts = await this.postsService.findAll()
+        const posts = await this.prisma.post.findMany({
+            include: {
+                comments: true,
+                likes: true,
+            },
+        })
+
+        const entities = posts.map((post) =>
+            EntityFactory.createPost(post, "latest"),
+        )
 
         return {
-            total: posts.length,
-            items: posts,
+            total: entities.length,
+            items: entities,
         }
     }
 
@@ -94,12 +83,12 @@ export class PostsController {
             },
         })
 
-        const mappedPosts = posts.map((post) => EntityFactory.createPost(post, mode))
+        const mappedPosts = posts.map((post) =>
+            EntityFactory.createPost(post, mode),
+        )
 
         let sorted = [...mappedPosts]
 
-        // Ranking inline por modo
-        // Esto define la forma de ordenar en base al filtro
         switch (mode) {
             case "latest":
                 sorted = sorted.sort(
@@ -145,7 +134,9 @@ export class PostsController {
             orderBy: { createdAt: "desc" },
         })
 
-        const entities = comments.map((comment) => EntityFactory.createComment(comment))
+        const entities = comments.map((comment) =>
+            EntityFactory.createComment(comment),
+        )
 
         return {
             total_comments: entities.length,
@@ -158,16 +149,10 @@ export class PostsController {
         @Param("id", ParseIntPipe) id: number,
         @Body() body: CreateCommentDto,
     ) {
-        const post = await this.postsService.findById(id)
-        if (!post) {
-            throw new NotFoundException("Post not found")
-        }
-
         if (body.content.length < 2) {
             throw new BadRequestException("Comment too short")
         }
 
-        // Cliente legacy: devuelve tipos mixtos (string/number/object).
         const moderation = legacyModerationApi.review(body.content)
 
         let blocked = false
@@ -186,7 +171,6 @@ export class PostsController {
             throw new BadRequestException("Comment blocked by moderation")
         }
 
-        // Se persiste la información en la base de datos
         const created = await this.prisma.comment.create({
             data: {
                 postId: id,
@@ -195,9 +179,15 @@ export class PostsController {
             },
         })
 
-        const entity = EntityFactory.createCommentWithModeration(created, moderation)
+        const entity = EntityFactory.createCommentWithModeration(
+            created,
+            moderation,
+        )
 
-        logDomainEvent("comment.created", { postId: id, commentId: created.id })
+        logDomainEvent("comment.created", {
+            postId: id,
+            commentId: created.id,
+        })
         fakeSendNotification("comment", { postId: id })
         fakeRecomputeSomething(id)
 
@@ -235,7 +225,10 @@ export class PostsController {
 
         const entity = EntityFactory.createLike(like)
 
-        logDomainEvent("like.created", { postId: id, likeId: like.id })
+        logDomainEvent("like.created", {
+            postId: id,
+            likeId: like.id,
+        })
         fakeSendNotification("like", { postId: id, reactionType })
         fakeRecomputeSomething(id)
 
