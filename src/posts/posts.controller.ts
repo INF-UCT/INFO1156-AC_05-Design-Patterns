@@ -9,37 +9,39 @@ import {
     Post,
     Query,
 } from "@nestjs/common"
-import { CommentEntity } from "@/posts/entities/comment.entity"
-import { LikeEntity } from "@/posts/entities/like.entity"
-import { PostEntity } from "@/posts/entities/post.entity"
-import { legacyModerationApi } from "@/posts/legacy-moderation.client"
 import { PrismaService } from "@/prisma/prisma.service"
-
 import { PostsService } from "@/posts/posts.service"
 import {
     AddLikeDto,
     CreateCommentDto,
     CreatePostDto,
     FeedQueryDto,
-} from "@/posts/posts.dtos"
+} from "@/posts/dto/index"
 
-const logDomainEvent = (
-    eventName: string,
-    payload: Record<string, unknown>,
-) => {
-    console.log(`[event:${eventName}]`, payload)
-}
+// ── Patrones de diseño aplicados ───────────────────────────────────────────
+// Creacional
 
-const fakeSendNotification = (
-    type: string,
-    payload: Record<string, unknown>,
-) => {
-    console.log(`[notify:${type}]`, payload)
-}
+import { PostEntityBuilder } from "@/posts/builders/post-entity.builder"
+import { CommentEntityBuilder } from "@/posts/builders/comment-entity.builder"
+import { LikeEntityBuilder } from "@/posts/builders/like-entity.builder"
 
-const fakeRecomputeSomething = (postId: number) => {
-    console.log(`[recompute] postId=${postId}`)
-}
+// Estructural
+import { ModerationAdapter } from "@/posts/adapters/moderation.adapter"
+// Comportamental – Strategy
+import { FeedSortStrategyFactory } from "@/posts/strategies/feed-sort-factory.strategy"
+// Comportamental – Observer
+import { DomainEventLogger } from "@/posts/observers/domain-logger.observer"
+import { NotificationObserver } from "@/posts/observers/notification.observer"
+import { RelevanceRecomputeObserver } from "@/posts/observers/relevance-recompute.observer"
+import { PostEventEmitter } from "@/posts/observers/post-emitter.observer"
+
+// ── Bootstrap de patrones ──────────────────────────────────────────────────
+const postEvents = new PostEventEmitter()
+postEvents.subscribe(new DomainEventLogger())
+postEvents.subscribe(new NotificationObserver())
+postEvents.subscribe(new RelevanceRecomputeObserver())
+
+const moderation = new ModerationAdapter()
 
 @Controller("api/posts")
 export class PostsController {
@@ -50,39 +52,21 @@ export class PostsController {
 
     @Post()
     async create(@Body() body: CreatePostDto) {
-        if (body.title.length < 3 || body.title.length > 120) {
-            throw new BadRequestException(
-                "Title length must be between 3 and 120",
-            )
-        }
-
-        if (!body.imageUrl.startsWith("http")) {
-            throw new BadRequestException("Image URL must start with http")
-        }
-
         const created = await this.postsService.create(body)
 
-        logDomainEvent("post.created", {
+        postEvents.emit({
+            type: "post.created",
             postId: created.id,
             title: created.title,
         })
-        fakeSendNotification("post", { postId: created.id })
-        fakeRecomputeSomething(created.id)
 
-        return {
-            ok: true,
-            payload: created,
-        }
+        return { ok: true, payload: created }
     }
 
     @Get()
     async findAll() {
         const posts = await this.postsService.findAll()
-
-        return {
-            total: posts.length,
-            items: posts,
-        }
+        return { total: posts.length, items: posts }
     }
 
     @Get("feed")
@@ -90,10 +74,7 @@ export class PostsController {
         const mode = query.mode || "latest"
 
         const posts = await this.prisma.post.findMany({
-            include: {
-                comments: true,
-                likes: true,
-            },
+            include: { comments: true, likes: true },
         })
 
         const mappedPosts = posts.map((post) => {
@@ -102,7 +83,6 @@ export class PostsController {
                 0,
             )
             const commentsCount = post.comments.length
-            // 36_000_00 = 1 hora en milisegundos.
             const hoursSinceCreated =
                 (Date.now() - new Date(post.createdAt).getTime()) / 36_000_00
             const relevanceScore =
@@ -110,103 +90,65 @@ export class PostsController {
                 commentsCount * 3 -
                 Math.floor(hoursSinceCreated)
 
-            const tags = post.title.split(" ").filter((word) => word.length > 4)
+            const tags = post.title.split(" ").filter((w) => w.length > 4)
             const metadata = {
-                likesWeights: post.likes.map((like) => like.weight),
-                commentLengths: post.comments.map(
-                    (comment) => comment.content.length,
-                ),
+                likesWeights: post.likes.map((l) => l.weight),
+                commentLengths: post.comments.map((c) => c.content.length),
                 hourOfCreate: new Date(post.createdAt).getHours(),
             }
 
-            return new PostEntity(
-                post.id,
-                post.title,
-                post.description,
-                post.imageUrl,
-                post.createdAt,
-                post.updatedAt,
-                likesCount,
-                commentsCount,
-                relevanceScore,
-                relevanceScore > 20,
-                "feed-controller",
-                tags,
-                metadata,
-                mode,
-            )
+            // Builder: construcción legible con métodos nombrados
+            return new PostEntityBuilder()
+                .withId(post.id)
+                .withTitle(post.title)
+                .withDescription(post.description)
+                .withImageUrl(post.imageUrl)
+                .withDates(post.createdAt, post.updatedAt)
+                .withLikesCount(likesCount)
+                .withCommentsCount(commentsCount)
+                .withRelevanceScore(relevanceScore)
+                .withIsFeatured(relevanceScore > 20)
+                .withSource("feed-controller")
+                .withTags(tags)
+                .withMetadata(metadata)
+                .withRankingMode(mode)
+                .build()
         })
 
-        let sorted = [...mappedPosts]
+        // Strategy: delega el ordenamiento sin switch/case
+        const strategy = FeedSortStrategyFactory.getStrategy(mode)
+        const sorted = strategy.sort(mappedPosts)
 
-        // Ranking inline por modo
-        // Esto define la forma de ordenar en base al filtro
-        switch (mode) {
-            case "latest":
-                sorted = sorted.sort(
-                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-                )
-                break
-            case "mostLiked":
-                sorted = sorted.sort((a, b) => b.likesCount - a.likesCount)
-                break
-            case "mostCommented":
-                sorted = sorted.sort(
-                    (a, b) => b.commentsCount - a.commentsCount,
-                )
-                break
-            case "relevance":
-                sorted = sorted.sort(
-                    (a, b) => b.relevanceScore - a.relevanceScore,
-                )
-                break
-            default:
-                sorted = sorted.sort(
-                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-                )
-                break
-        }
-
-        return {
-            mode,
-            count: sorted.length,
-            rows: sorted,
-        }
+        return { mode, count: sorted.length, rows: sorted }
     }
 
     @Get(":id/comments")
     async getComments(@Param("id", ParseIntPipe) id: number) {
         const post = await this.postsService.findById(id)
-        if (!post) {
-            throw new NotFoundException("Post not found")
-        }
+        if (!post) throw new NotFoundException("Post not found")
 
         const comments = await this.prisma.comment.findMany({
             where: { postId: id },
             orderBy: { createdAt: "desc" },
         })
 
-        const entities = comments.map(
-            (comment) =>
-                new CommentEntity(
-                    comment.id,
-                    comment.postId,
-                    comment.content,
-                    comment.createdAt,
-                    comment.updatedAt,
-                    comment.source,
-                    "approved",
-                    comment.content.length > 80 ? 70 : 45,
-                    comment.content.length % 2 === 0,
-                    "es",
-                    { chars: comment.content.length, source: comment.source },
-                ),
+        const entities = comments.map((comment) =>
+            // Builder: construcción clara por pasos
+            new CommentEntityBuilder()
+                .withId(comment.id)
+                .withPostId(comment.postId)
+                .withContent(comment.content)
+                .withDates(comment.createdAt, comment.updatedAt)
+                .withSource(comment.source)
+                .withModerationState("approved")
+                .withSentimentScore(comment.content.length > 80 ? 70 : 45)
+                .withIsPinned(comment.content.length % 2 === 0)
+                .withLanguage("es")
+                .withMetadata({ chars: comment.content.length, source: comment.source })
+                .build()
         )
 
-        return {
-            total_comments: entities.length,
-            comments: entities,
-        }
+        return { total_comments: entities.length, comments: entities }
     }
 
     @Post(":id/comments")
@@ -215,64 +157,37 @@ export class PostsController {
         @Body() body: CreateCommentDto,
     ) {
         const post = await this.postsService.findById(id)
-        if (!post) {
-            throw new NotFoundException("Post not found")
-        }
+        if (!post) throw new NotFoundException("Post not found")
 
-        if (body.content.length < 2) {
-            throw new BadRequestException("Comment too short")
-        }
-
-        // Cliente legacy: devuelve tipos mixtos (string/number/object).
-        const moderation = legacyModerationApi.review(body.content)
-
-        let blocked = false
-
-        if (moderation === "BLOCK") {
-            blocked = true
-        } else if (typeof moderation === "number") {
-            blocked = moderation < 1
-        } else if (typeof moderation === "object") {
-            blocked = !("pass" in moderation && moderation.pass)
-        } else if (moderation === "OK") {
-            blocked = false
-        }
-
-        if (blocked) {
+        // Adapter: interfaz uniforme sin if/else para tipos mixtos
+        const result = moderation.review(body.content)
+        if (!result.allowed) {
             throw new BadRequestException("Comment blocked by moderation")
         }
 
-        // Se persiste la información en la base de datos
         const created = await this.prisma.comment.create({
-            data: {
-                postId: id,
-                content: body.content,
-                source: "controller",
-            },
+            data: { postId: id, content: body.content, source: "controller" },
         })
 
-        const entity = new CommentEntity(
-            created.id,
-            created.postId,
-            created.content,
-            created.createdAt,
-            created.updatedAt,
-            created.source,
-            "approved",
-            created.content.length > 60 ? 80 : 40,
-            false,
-            "es",
-            { moderation, source: "legacy" },
-        )
+        const entity = new CommentEntityBuilder()
+            .withId(created.id)
+            .withPostId(created.postId)
+            .withContent(created.content)
+            .withDates(created.createdAt, created.updatedAt)
+            .withSource(created.source)
+            .withModerationState("approved")
+            .withSentimentScore(created.content.length > 60 ? 80 : 40)
+            .withMetadata({ moderationReason: result.reason, source: "adapter" })
+            .build()
 
-        logDomainEvent("comment.created", { postId: id, commentId: created.id })
-        fakeSendNotification("comment", { postId: id })
-        fakeRecomputeSomething(id)
+        // Observer: un emit reemplaza 3 llamadas manuales
+        postEvents.emit({
+            type: "comment.created",
+            postId: id,
+            commentId: created.id,
+        })
 
-        return {
-            message: "comment_created",
-            entity,
-        }
+        return { message: "comment_created", entity }
     }
 
     @Post(":id/likes")
@@ -281,9 +196,7 @@ export class PostsController {
         @Body() body: AddLikeDto,
     ) {
         const post = await this.postsService.findById(id)
-        if (!post) {
-            throw new NotFoundException("Post not found")
-        }
+        if (!post) throw new NotFoundException("Post not found")
 
         const reactionType = body.reactionType || "like"
         const weight = body.weight || 1
@@ -293,33 +206,28 @@ export class PostsController {
         }
 
         const like = await this.prisma.like.create({
-            data: {
-                postId: id,
-                reactionType,
-                weight,
-                source: "controller",
-            },
+            data: { postId: id, reactionType, weight, source: "controller" },
         })
 
-        const entity = new LikeEntity(
-            like.id,
-            like.postId,
-            like.reactionType,
-            like.weight,
-            like.source,
-            like.createdAt,
-            like.weight > 2 ? "strong" : "normal",
-            true,
-            { from: "manual", r: like.reactionType },
-        )
+        const entity = new LikeEntityBuilder()
+            .withId(like.id)
+            .withPostId(like.postId)
+            .withReactionType(like.reactionType)
+            .withWeight(like.weight)
+            .withSource(like.source)
+            .withCreatedAt(like.createdAt)
+            .withShouldAffectScore(true)
+            .withMetadata({ from: "manual", r: like.reactionType })
+            .build()
 
-        logDomainEvent("like.created", { postId: id, likeId: like.id })
-        fakeSendNotification("like", { postId: id, reactionType })
-        fakeRecomputeSomething(id)
+        // Observer: un emit reemplaza 3 llamadas manuales
+        postEvents.emit({
+            type: "like.created",
+            postId: id,
+            likeId: like.id,
+            reactionType,
+        })
 
-        return {
-            success: true,
-            like: entity,
-        }
+        return { success: true, like: entity }
     }
 }
