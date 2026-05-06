@@ -1,3 +1,7 @@
+import { CommentFactory } from "./factories/comment.factory"
+import { PostFactory } from "./factories/post.factory"
+import { ModerationAdapter } from "@/posts/moderation.adapter"
+import { FeedSortContext } from "@/posts/strategies/feed-sort.context"
 import {
     BadRequestException,
     Body,
@@ -9,10 +13,7 @@ import {
     Post,
     Query,
 } from "@nestjs/common"
-import { CommentEntity } from "@/posts/entities/comment.entity"
 import { LikeEntity } from "@/posts/entities/like.entity"
-import { PostEntity } from "@/posts/entities/post.entity"
-import { legacyModerationApi } from "@/posts/legacy-moderation.client"
 import { PrismaService } from "@/prisma/prisma.service"
 
 import { PostsService } from "@/posts/posts.service"
@@ -22,30 +23,16 @@ import {
     CreatePostDto,
     FeedQueryDto,
 } from "@/posts/posts.dtos"
-
-const logDomainEvent = (
-    eventName: string,
-    payload: Record<string, unknown>,
-) => {
-    console.log(`[event:${eventName}]`, payload)
-}
-
-const fakeSendNotification = (
-    type: string,
-    payload: Record<string, unknown>,
-) => {
-    console.log(`[notify:${type}]`, payload)
-}
-
-const fakeRecomputeSomething = (postId: number) => {
-    console.log(`[recompute] postId=${postId}`)
-}
+import { PostEventsEmitter } from "@/posts/observers/post-events.emitter"
 
 @Controller("api/posts")
 export class PostsController {
     constructor(
         private readonly postsService: PostsService,
         private readonly prisma: PrismaService,
+        private readonly moderationAdapter: ModerationAdapter,
+        private readonly feedSortContext: FeedSortContext,
+        private readonly postEventsEmitter: PostEventsEmitter,
     ) {}
 
     @Post()
@@ -62,12 +49,11 @@ export class PostsController {
 
         const created = await this.postsService.create(body)
 
-        logDomainEvent("post.created", {
+        this.postEventsEmitter.emit({
+            eventName: "post.created",
             postId: created.id,
-            title: created.title,
+            payload: { postId: created.id, title: created.title },
         })
-        fakeSendNotification("post", { postId: created.id })
-        fakeRecomputeSomething(created.id)
 
         return {
             ok: true,
@@ -96,77 +82,11 @@ export class PostsController {
             },
         })
 
-        const mappedPosts = posts.map((post) => {
-            const likesCount = post.likes.reduce(
-                (sum, like) => sum + like.weight,
-                0,
-            )
-            const commentsCount = post.comments.length
-            // 36_000_00 = 1 hora en milisegundos.
-            const hoursSinceCreated =
-                (Date.now() - new Date(post.createdAt).getTime()) / 36_000_00
-            const relevanceScore =
-                likesCount * 2 +
-                commentsCount * 3 -
-                Math.floor(hoursSinceCreated)
+        const mappedPosts = posts.map((post) =>
+            PostFactory.createFromFeed(post, mode),
+        )
 
-            const tags = post.title.split(" ").filter((word) => word.length > 4)
-            const metadata = {
-                likesWeights: post.likes.map((like) => like.weight),
-                commentLengths: post.comments.map(
-                    (comment) => comment.content.length,
-                ),
-                hourOfCreate: new Date(post.createdAt).getHours(),
-            }
-
-            return new PostEntity(
-                post.id,
-                post.title,
-                post.description,
-                post.imageUrl,
-                post.createdAt,
-                post.updatedAt,
-                likesCount,
-                commentsCount,
-                relevanceScore,
-                relevanceScore > 20,
-                "feed-controller",
-                tags,
-                metadata,
-                mode,
-            )
-        })
-
-        let sorted = [...mappedPosts]
-
-        // Ranking inline por modo
-        // Esto define la forma de ordenar en base al filtro
-        switch (mode) {
-            case "latest":
-                sorted = sorted.sort(
-                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-                )
-                break
-            case "mostLiked":
-                sorted = sorted.sort((a, b) => b.likesCount - a.likesCount)
-                break
-            case "mostCommented":
-                sorted = sorted.sort(
-                    (a, b) => b.commentsCount - a.commentsCount,
-                )
-                break
-            case "relevance":
-                sorted = sorted.sort(
-                    (a, b) => b.relevanceScore - a.relevanceScore,
-                )
-                break
-            default:
-                sorted = sorted.sort(
-                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-                )
-                break
-        }
-
+        const sorted = this.feedSortContext.sort(mode, mappedPosts)
         return {
             mode,
             count: sorted.length,
@@ -186,23 +106,9 @@ export class PostsController {
             orderBy: { createdAt: "desc" },
         })
 
-        const entities = comments.map(
-            (comment) =>
-                new CommentEntity(
-                    comment.id,
-                    comment.postId,
-                    comment.content,
-                    comment.createdAt,
-                    comment.updatedAt,
-                    comment.source,
-                    "approved",
-                    comment.content.length > 80 ? 70 : 45,
-                    comment.content.length % 2 === 0,
-                    "es",
-                    { chars: comment.content.length, source: comment.source },
-                ),
+        const entities = comments.map((comment) =>
+            CommentFactory.create(comment),
         )
-
         return {
             total_comments: entities.length,
             comments: entities,
@@ -223,22 +129,11 @@ export class PostsController {
             throw new BadRequestException("Comment too short")
         }
 
-        // Cliente legacy: devuelve tipos mixtos (string/number/object).
-        const moderation = legacyModerationApi.review(body.content)
+        const moderationResult = this.moderationAdapter.reviewContent(
+            body.content,
+        )
 
-        let blocked = false
-
-        if (moderation === "BLOCK") {
-            blocked = true
-        } else if (typeof moderation === "number") {
-            blocked = moderation < 1
-        } else if (typeof moderation === "object") {
-            blocked = !("pass" in moderation && moderation.pass)
-        } else if (moderation === "OK") {
-            blocked = false
-        }
-
-        if (blocked) {
+        if (moderationResult.isBlocked) {
             throw new BadRequestException("Comment blocked by moderation")
         }
 
@@ -251,23 +146,13 @@ export class PostsController {
             },
         })
 
-        const entity = new CommentEntity(
-            created.id,
-            created.postId,
-            created.content,
-            created.createdAt,
-            created.updatedAt,
-            created.source,
-            "approved",
-            created.content.length > 60 ? 80 : 40,
-            false,
-            "es",
-            { moderation, source: "legacy" },
-        )
+        const entity = CommentFactory.create(created, moderationResult.metadata)
 
-        logDomainEvent("comment.created", { postId: id, commentId: created.id })
-        fakeSendNotification("comment", { postId: id })
-        fakeRecomputeSomething(id)
+        this.postEventsEmitter.emit({
+            eventName: "comment.created",
+            postId: id,
+            payload: { postId: id, commentId: created.id },
+        })
 
         return {
             message: "comment_created",
@@ -313,9 +198,11 @@ export class PostsController {
             { from: "manual", r: like.reactionType },
         )
 
-        logDomainEvent("like.created", { postId: id, likeId: like.id })
-        fakeSendNotification("like", { postId: id, reactionType })
-        fakeRecomputeSomething(id)
+        this.postEventsEmitter.emit({
+            eventName: "like.created",
+            postId: id,
+            payload: { postId: id, likeId: like.id, reactionType },
+        })
 
         return {
             success: true,
