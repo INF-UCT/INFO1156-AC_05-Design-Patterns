@@ -14,6 +14,7 @@ import { CommentEntityBuilder } from "@/posts/builders/comment.entity.builder"
 import { LikeEntityBuilder } from "@/posts/builders/like.entity.builder"
 import { PrismaService } from "@/prisma/prisma.service"
 import { IModerationService } from "@/posts/interfaces/moderation.interface"
+import { DomainEventPublisher } from "./observers/domain-event-publisher.service";
 
 import { PostsService } from "@/posts/posts.service"
 import {
@@ -23,25 +24,6 @@ import {
     FeedQueryDto,
 } from "@/posts/posts.dtos"
 import { FeedOrderingContext } from "@/posts/strategies/feed-ordering.context"
-
-const logDomainEvent = (
-    eventName: string,
-    payload: Record<string, unknown>,
-) => {
-    console.log(`[event:${eventName}]`, payload)
-}
-
-const fakeSendNotification = (
-    type: string,
-    payload: Record<string, unknown>,
-) => {
-    console.log(`[notify:${type}]`, payload)
-}
-
-const fakeRecomputeSomething = (postId: number) => {
-    console.log(`[recompute] postId=${postId}`)
-}
-
 @Controller("api/posts")
 export class PostsController {
     private readonly feedOrderingContext = new FeedOrderingContext()
@@ -50,6 +32,7 @@ export class PostsController {
         private readonly postsService: PostsService,
         private readonly prisma: PrismaService,
         private readonly moderationService: IModerationService,
+        private readonly eventPublisher: DomainEventPublisher
     ) {}
 
     @Post()
@@ -66,12 +49,10 @@ export class PostsController {
 
         const created = await this.postsService.create(body)
 
-        logDomainEvent("post.created", {
-            postId: created.id,
-            title: created.title,
+        this.eventPublisher.publish({
+            type: "post.created",
+            payload: { postId: created.id, title: created.title },
         })
-        fakeSendNotification("post", { postId: created.id })
-        fakeRecomputeSomething(created.id)
 
         return {
             ok: true,
@@ -202,9 +183,10 @@ export class PostsController {
             .setMetadata({ moderation, source: "legacy" })
             .build()
 
-        logDomainEvent("comment.created", { postId: id, commentId: created.id })
-        fakeSendNotification("comment", { postId: id })
-        fakeRecomputeSomething(id)
+        this.eventPublisher.publish({
+            type: "comment.created",
+            payload: { postId: id, commentId: created.id },
+        })
 
         return {
             message: "comment_created",
@@ -249,9 +231,10 @@ export class PostsController {
             .setMetadata({ from: "manual", r: reactionType })
             .build()
 
-        logDomainEvent("like.created", { postId: id, likeId: like.id })
-        fakeSendNotification("like", { postId: id, reactionType })
-        fakeRecomputeSomething(id)
+        this.eventPublisher.publish({
+            type: "like.created",
+            payload: { postId: id, likeId: like.id, reactionType },
+        })
 
         return {
             success: true,

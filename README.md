@@ -68,19 +68,19 @@ Este documento detalla las decisiones arquitectónicas y la implementación de p
 
 - **Fundamento:** Las entidades principales de la aplicación (como `PostEntity`) tienden a crecer en complejidad, requiriendo cada vez más parámetros opcionales y reglas de validación durante su creación. Si utilizamos constructores tradicionales, caemos rápidamente en el "anti-patrón de constructor telescópico", dando como resultado inicializaciones enormes y muy difíciles de leer (como ocurre al tener constructores con 14 parámetros). El patrón Builder nos permite ensamblar estos objetos complejos paso a paso, volviendo el código mucho más declarativo y limpio.
 - **Implementación:**
-  Creamos una clase `PostBuilder` que expone métodos fluidos (chaining) para cada uno de los atributos de la entidad, por ejemplo: `.withTitle(title)`, `.withContent(content)` y `.withLikesCount(count)`. Cada método devuelve la instancia actual del builder (`this`), permitiendo encadenar llamadas de forma continua. Al final, un método `.build()` se encarga de instanciar la entidad definitiva reuniendo toda la configuración provista.
+  Creamos las clases `PostEntityBuilder`, `CommentEntityBuilder` y `LikeEntityBuilder` que exponen métodos fluidos (chaining) para cada uno de los atributos de las entidades, por ejemplo: `.setId(id)`, `.setTitle(title)`, `.calculateCounts(likes, comments)`. Cada método devuelve la instancia actual del builder (`this`), permitiendo encadenar llamadas de forma continua. Al final, un método `.build()` se encarga de instanciar la entidad definitiva reuniendo toda la configuración provista, encapsulando además la lógica de cálculo de campos derivados.
 
 ### 3. Patrón Strategy (Estrategia) para el ordenamiento del feed
 
 - **Fundamento:** El ordenamiento del feed (recientes, más votados, más comentados, relevancia) varía dinámicamente según el parámetro `mode` que solicite el usuario en la petición. Si intentamos resolver esto apilando múltiples bloques `if/else` o un gran `switch` dentro del controlador, estaríamos rompiendo el principio Open/Closed. Esto hace que el código se vuelva frágil y muy tedioso de modificar si el día de mañana surgen nuevas formas de ordenamiento. Strategy nos permite extraer y encapsular estas distintas lógicas en familias de algoritmos independientes e intercambiables.
 - **Implementación:**
-  Definimos una interfaz común `FeedOrderingStrategy` que cuenta con el método `sort()`. A partir de ella, creamos las distintas clases concretas (ej. `LatestOrderingStrategy`, `MostLikedOrderingStrategy`). En el controlador, en lugar de evaluar condiciones, simplemente delegamos la decisión a un contexto (`FeedOrderingContext`). Este contexto es el encargado de devolvernos la estrategia correcta en base al parámetro recibido, para luego ejecutar la ordenación. Así, el controlador mantiene una única responsabilidad y su lectura es lineal.
+  Definimos una interfaz común `FeedOrderingStrategy` que cuenta con el método `sort()`. A partir de ella, creamos las distintas clases concretas (ej. `LatestOrderingStrategy`, `MostLikedOrderingStrategy`). En el controlador, en lugar de evaluar condiciones con un `switch`, instanciamos un `FeedOrderingContext` que nos devuelve la estrategia correcta en base al parámetro `mode` recibido. El controlador simplemente delega el ordenamiento a `strategy.sort(sorted)`. Así, el controlador mantiene una única responsabilidad y su lectura es lineal.
 
-### 4. Patrón Factory (Fábrica) para la instanciación de `PrismaService`
+### 4. Patrón Observer (Observador) para eventos de dominio
 
-- **Fundamento:** A pesar de que NestJS maneja instancias en forma de Singleton de manera excelente, la configuración de la conexión a la base de datos a menudo requiere una lógica condicional basada en el entorno (como cambiar entre la base de datos de testing y la de desarrollo/producción). Si dejamos esta lógica de selección embebida directamente dentro de la clase de servicio, ensuciamos su propósito y violamos el principio de Responsabilidad Única.
+- **Fundamento:** En el flujo original, el controlador debía invocar manualmente múltiples funciones secuenciales (`logDomainEvent`, `fakeSendNotification`, `fakeRecomputeSomething`) cada vez que ocurría una acción (crear post, comentario o like). Esto generaba duplicación de código y obligaba a modificar múltiples lugares si se añadía un nuevo efecto secundario. El patrón Observer permite desacoplar el evento de sus manejadores, permitiendo que el controlador solo emita un evento y los observadores reaccionen automáticamente.
 - **Implementación:**
-  Creamos una clase `PrismaClientFactory` con un método estático `create(environment)`. Esta fábrica evalúa el entorno de ejecución actual, selecciona qué archivo de base de datos usar (`test.db` o `sqlite.db`), construye las opciones del adaptador `PrismaLibSql` y retorna la instancia del `PrismaService` lista para ser usada. Finalmente, en el módulo de NestJS (`PrismaModule`), utilizamos un `useFactory` para registrar este servicio. Así extraemos toda la lógica compleja de creación y selección fuera del cliente en sí.
+  Creamos una interfaz `DomainEvent` y `EventObserver`. Luego, implementamos observadores concretos (`LoggerObserver`, `NotificationObserver`, `RecomputeObserver`) que reaccionan a los eventos. El `DomainEventPublisher` actúa como el sujeto (Subject), manteniendo una lista de observadores y notificándoles cuando se publica un evento mediante el método `publish()`. En el controlador, simplemente se inyecta el Publisher y se llama a `publish()` con el tipo de evento y el payload, eliminando la lógica de invocación manual.
 
 ---
 
@@ -88,12 +88,7 @@ Este documento detalla las decisiones arquitectónicas y la implementación de p
 
 Durante la fase de diseño consideramos otras alternativas, pero decidimos descartarlas a favor de soluciones más alineadas a las necesidades inmediatas del proyecto. A continuación detallamos los motivos:
 
-### 1. Patrón Observer (Observador) para `Post Controller`
-
-- **Posible implementación:** Podríamos haberlo utilizado para emitir un evento cada vez que se creara una publicación o una interacción (likes, comentarios), notificando así a múltiples observadores (sistemas de logging, envío de notificaciones o tareas en segundo plano) para que reaccionen a dicho evento.
-- **Motivo de descarte:** Si bien Observer es un patrón excelente para aislar efectos secundarios asíncronos (como `fakeSendNotification` o `logDomainEvent`), el problema estructural de mayor urgencia en nuestro controlador era **gestionar la variabilidad del comportamiento principal** (es decir, el ordenamiento). El patrón _Strategy_ atacó de lleno la alta complejidad ciclomática del flujo central, aportando un valor inmediato a la mantenibilidad del código. Implementar Observer habría añadido una capa extra de eventos (pub/sub) que, aunque interesante a futuro, no iba a solucionar los gigantescos bloques lógicos del feed.
-
-### 2. Patrón Facade (Fachada) para `Post Controller` y `Post Service`
+### 1. Patrón Facade (Fachada) para `Post Controller` y `Post Service`
 
 - **Posible implementación:** Consistiría en crear una clase `PostFacade` que agrupara las llamadas hacia el `PostService` y hacia el servicio de moderación, ofreciendo una única función de alto nivel (como `createAndModeratePost()`) lista para ser consumida por el controlador.
 - **Motivo de descarte:** Al utilizar una arquitectura dividida por capas (Controlador -> Servicio -> Repositorio), el Servicio _ya actúa de forma inherente_ como una fachada para nuestra lógica de negocio. Introducir otra Fachada adicional entre el controlador y el servicio solo hubiese sumado una capa de abstracción redundante. Decidimos emplear el patrón **Adapter** para controlar la complejidad externa (el servicio heredado de moderación), aislando esa "toxicidad" específica en lugar de intentar esconderla burdamente detrás de un Facade genérico.
@@ -102,9 +97,11 @@ Durante la fase de diseño consideramos otras alternativas, pero decidimos desca
 
 ## Conclusión de la arquitectura
 
-La decisión de implementar **Adapter**, **Builder**, **Strategy** y **Factory** por sobre Observer o Facade se basó completamente en atacar los verdaderos cuellos de botella de nuestro dominio:
+La decisión de implementar **Adapter**, **Builder**, **Strategy** y **Observer** se basó completamente en atacar los verdaderos cuellos de botella de nuestro dominio:
 
-1. **Adapter** elimina de raíz el fuerte acoplamiento que teníamos con el sistema de moderación heredado (un problema de incompatibilidad que un Facade no llega a solucionar a nivel estricto de interfaces).
-2. **Builder** viene a darnos una solución elegante a la dificultad (y pésima legibilidad) que supone instanciar entidades masivas atestadas de parámetros.
-3. **Strategy** exprime el polimorfismo para destruir la complejidad ciclomática y los bloques condicionales pesados asociados al ordenamiento del feed, priorizando la solidez de la lógica principal por encima de la gestión de efectos secundarios que nos ofrecía Observer.
-4. **Factory** encapsula la complejidad de instanciar un servicio de base de datos multi-entorno, separando inteligentemente la lógica de _creación_ de la lógica de _uso_ y permitiendo mantener nuestro código modular frente a múltiples configuraciones.
+1. **Adapter** elimina de raíz el fuerte acoplamiento que teníamos con el sistema de moderación heredado, estandarizando la respuesta en una interfaz limpia.
+2. **Builder** nos da una solución elegante a la dificultad (y pésima legibilidad) que supone instanciar entidades masivas atestadas de parámetros, encapsulando la lógica de cálculo de campos derivados.
+3. **Strategy** exprime el polimorfismo para destruir la complejidad ciclomática y los bloques condicionales pesados asociados al ordenamiento del feed mediante el uso de `FeedOrderingContext`.
+4. **Observer** desacopla los efectos secundarios (logging, notificaciones, recálculos) del controlador mediante el `DomainEventPublisher`, eliminando la duplicación de funciones manuales.
+
+El único patrón descartado fue **Facade**, ya que el `PostsService` ya actúa como fachada natural de la lógica de negocio, haciendo redundante una capa adicional.
