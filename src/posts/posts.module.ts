@@ -3,7 +3,7 @@ import { PostsController } from "@/posts/posts.controller"
 import { PostsService } from "@/posts/posts.service"
 import { IModerationService } from "./interfaces/moderation.interface"
 import { LegacyModerationAdapter } from "./legacy-moderation.adapter"
-import { DomainEventPublisher } from "@/posts/events/domain-event-publisher.service"
+import { DomainEventPublisher } from "./observers/domain-event-publisher.service"
 import { LoggerObserver } from "@/posts/observers/logger.observer"
 import { NotificationObserver } from "@/posts/observers/notification.observer"
 import { RecomputeObserver } from "@/posts/observers/recompute.observer"
@@ -17,7 +17,7 @@ import { RecomputeObserver } from "@/posts/observers/recompute.observer"
         LoggerObserver,
         NotificationObserver,
         RecomputeObserver,
-        //
+        // ===================================
         {
             provide: IModerationService,
             useClass: LegacyModerationAdapter,

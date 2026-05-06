@@ -6,7 +6,7 @@ import { NotificationObserver } from "./notification.observer";
 import { RecomputeObserver } from "./recompute.observer";
 
 // Este es el coordinador, almacena todos los observadores posibles
-@Injectable()
+@Injectable() // Permite usarla de manera externa
 export class DomainEventPublisher implements OnModuleInit {
 
     private observers: EventObserver[] = []
