@@ -7,8 +7,14 @@ import {
     ParseIntPipe,
     Post,
     Query,
+    NotFoundException,
 } from "@nestjs/common"
-import { PostsFacade } from "@/posts/posts.facade"
+
+import { EntityFactory } from "@/posts/entities/entity.factory"
+import { legacyModerationApi } from "@/posts/legacy-moderation.client"
+import { PrismaService } from "@/prisma/prisma.service"
+import { PostsService } from "@/posts/posts.service"
+
 import {
     AddLikeDto,
     CreateCommentDto,
@@ -18,7 +24,10 @@ import {
 
 @Controller("api/posts")
 export class PostsController {
-    constructor(private readonly postsFacade: PostsFacade) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly postsService: PostsService,
+    ) {}
 
     @Post()
     async create(@Body() body: CreatePostDto) {
@@ -32,33 +41,107 @@ export class PostsController {
             throw new BadRequestException("Image URL must start with http")
         }
 
-        const created = await this.postsFacade.createPost(body)
+        const created = await this.prisma.post.create({
+            data: body,
+        })
+
+        const entity = EntityFactory.createPost(created, "latest")
 
         return {
             ok: true,
-            payload: created,
+            payload: entity,
         }
     }
 
     @Get()
     async findAll() {
-        const posts = await this.postsFacade.getAllPosts()
+        const posts = await this.prisma.post.findMany({
+            include: {
+                comments: true,
+                likes: true,
+            },
+        })
+
+        const entities = posts.map((post) =>
+            EntityFactory.createPost(post, "latest"),
+        )
 
         return {
-            total: posts.length,
-            items: posts,
+            total: entities.length,
+            items: entities,
         }
     }
 
     @Get("feed")
     async getFeed(@Query() query: FeedQueryDto) {
         const mode = query.mode || "latest"
-        return this.postsFacade.getFeed(mode)
+
+        const posts = await this.prisma.post.findMany({
+            include: {
+                comments: true,
+                likes: true,
+            },
+        })
+
+        const mappedPosts = posts.map((post) =>
+            EntityFactory.createPost(post, mode),
+        )
+
+        let sorted = [...mappedPosts]
+
+        switch (mode) {
+            case "latest":
+                sorted = sorted.sort(
+                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+                )
+                break
+            case "mostLiked":
+                sorted = sorted.sort((a, b) => b.likesCount - a.likesCount)
+                break
+            case "mostCommented":
+                sorted = sorted.sort(
+                    (a, b) => b.commentsCount - a.commentsCount,
+                )
+                break
+            case "relevance":
+                sorted = sorted.sort(
+                    (a, b) => b.relevanceScore - a.relevanceScore,
+                )
+                break
+            default:
+                sorted = sorted.sort(
+                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+                )
+                break
+        }
+
+        return {
+            mode,
+            count: sorted.length,
+            rows: sorted,
+        }
     }
 
     @Get(":id/comments")
     async getComments(@Param("id", ParseIntPipe) id: number) {
-        return this.postsFacade.getComments(id)
+        const post = await this.postsService.findById(id)
+        if (!post) {
+            throw new NotFoundException("Post not found")
+        }
+
+        const comments = await this.prisma.comment.findMany({
+            where: { postId: id },
+            orderBy: { createdAt: "desc" },
+        })
+
+        const entities = comments.map((comment) =>
+            EntityFactory.createComment(comment),
+        )
+
+        return {
+            total_comments: entities.length,
+            comments: entities,
+        }
     }
 
     @Post(":id/comments")
@@ -70,7 +153,48 @@ export class PostsController {
             throw new BadRequestException("Comment too short")
         }
 
-        return this.postsFacade.createComment(id, body)
+        const moderation = legacyModerationApi.review(body.content)
+
+        let blocked = false
+
+        if (moderation === "BLOCK") {
+            blocked = true
+        } else if (typeof moderation === "number") {
+            blocked = moderation < 1
+        } else if (typeof moderation === "object") {
+            blocked = !("pass" in moderation && moderation.pass)
+        } else if (moderation === "OK") {
+            blocked = false
+        }
+
+        if (blocked) {
+            throw new BadRequestException("Comment blocked by moderation")
+        }
+
+        const created = await this.prisma.comment.create({
+            data: {
+                postId: id,
+                content: body.content,
+                source: "controller",
+            },
+        })
+
+        const entity = EntityFactory.createCommentWithModeration(
+            created,
+            moderation,
+        )
+
+        logDomainEvent("comment.created", {
+            postId: id,
+            commentId: created.id,
+        })
+        fakeSendNotification("comment", { postId: id })
+        fakeRecomputeSomething(id)
+
+        return {
+            message: "comment_created",
+            entity,
+        }
     }
 
     @Post(":id/likes")
@@ -78,6 +202,39 @@ export class PostsController {
         @Param("id", ParseIntPipe) id: number,
         @Body() body: AddLikeDto,
     ) {
-        return this.postsFacade.addLike(id, body)
+        const post = await this.postsService.findById(id)
+        if (!post) {
+            throw new NotFoundException("Post not found")
+        }
+
+        const reactionType = body.reactionType || "like"
+        const weight = body.weight || 1
+
+        if (weight < 1) {
+            throw new BadRequestException("Weight must be at least 1")
+        }
+
+        const like = await this.prisma.like.create({
+            data: {
+                postId: id,
+                reactionType,
+                weight,
+                source: "controller",
+            },
+        })
+
+        const entity = EntityFactory.createLike(like)
+
+        logDomainEvent("like.created", {
+            postId: id,
+            likeId: like.id,
+        })
+        fakeSendNotification("like", { postId: id, reactionType })
+        fakeRecomputeSomething(id)
+
+        return {
+            success: true,
+            like: entity,
+        }
     }
 }
