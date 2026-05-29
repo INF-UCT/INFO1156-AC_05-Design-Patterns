@@ -1,13 +1,11 @@
 import {
-    BadRequestException,
-    Body,
     Controller,
     Get,
-    NotFoundException,
-    Param,
-    ParseIntPipe,
     Post,
+    Body,
+    Param,
     Query,
+    ParseIntPipe,
 } from "@nestjs/common"
 import { CommentFactory } from "@/posts/factories/comment.factory"
 import { LikeFactory } from "@/posts/factories/like.factory"
@@ -25,24 +23,12 @@ import {
     FeedQueryDto,
 } from "@/posts/posts.dtos"
 
-const logDomainEvent = (
-    eventName: string,
-    payload: Record<string, unknown>,
-) => {
-    console.log(`[event:${eventName}]`, payload)
-}
-
-const fakeSendNotification = (
-    type: string,
-    payload: Record<string, unknown>,
-) => {
-    console.log(`[notify:${type}]`, payload)
-}
-
-const fakeRecomputeSomething = (postId: number) => {
-    console.log(`[recompute] postId=${postId}`)
-}
-
+/**
+ * Controller Layer (Service Layer Pattern / N-Tier Architecture):
+ * By moving business logic to the PostsService, the controller is solely responsible
+ * for handling incoming HTTP requests, extracting payloads, and sending responses.
+ * This satisfies the Single Responsibility Principle (SRP).
+ */
 @Controller("api/posts")
 export class PostsController {
     constructor(
@@ -74,14 +60,6 @@ export class PostsController {
         }
 
         const created = await this.postsService.create(body)
-
-        logDomainEvent("post.created", {
-            postId: created.id,
-            title: created.title,
-        })
-        fakeSendNotification("post", { postId: created.id })
-        fakeRecomputeSomething(created.id)
-
         return {
             ok: true,
             payload: created,
@@ -91,7 +69,6 @@ export class PostsController {
     @Get()
     async findAll() {
         const posts = await this.postsService.findAll()
-
         return {
             total: posts.length,
             items: posts,
