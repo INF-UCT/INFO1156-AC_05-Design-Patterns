@@ -1,6 +1,11 @@
 import { Injectable } from "@nestjs/common"
 import { legacyModerationApi } from "@/posts/legacy-moderation.client"
 
+type LegacyModerationResult =
+    | string
+    | number
+    | { pass: boolean; reason: string }
+
 /**
  * Resultado normalizado de la API de moderación
  */
@@ -46,7 +51,9 @@ export class ModerationAdapter {
      * Normaliza las respuestas inconsistentes del cliente legacy
      * Legacy API puede devolver: strings, objetos, números
      */
-    private normalizeLegacyResponse(legacyResult: any): IModerationResult {
+    private normalizeLegacyResponse(
+        legacyResult: LegacyModerationResult,
+    ): IModerationResult {
         // Si es un string
         if (typeof legacyResult === "string") {
             const lower = legacyResult.toLowerCase()
@@ -67,21 +74,29 @@ export class ModerationAdapter {
 
         // Si es un objeto
         if (typeof legacyResult === "object" && legacyResult !== null) {
-            const score = legacyResult.score ?? legacyResult.spam_score ?? 0
-            const status = legacyResult.status ?? legacyResult.action ?? "ok"
+            const result = legacyResult as {
+                action?: string
+                pass?: boolean
+                reason?: string
+                score?: number
+                spam_score?: number
+                status?: string
+            }
+            const score = result.score ?? result.spam_score ?? 0
+            const status = result.status ?? result.action ?? "ok"
 
-            if (score > 0.7 || status === "blocked") {
+            if (score > 0.7 || status === "blocked" || result.pass === false) {
                 return {
                     action: "block",
                     score,
-                    reason: legacyResult.reason,
+                    reason: result.reason,
                 }
             }
             if (score > 0.4 || status === "review") {
                 return {
                     action: "review",
                     score,
-                    reason: legacyResult.reason,
+                    reason: result.reason,
                 }
             }
             return { action: "allow", score }

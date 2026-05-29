@@ -1,11 +1,17 @@
+import type { Comment, Like, Post } from "@prisma/client"
 import { PostEntity } from "@/posts/entities/post.entity"
 import { RANKING_CONSTANTS } from "@/posts/constants"
+
+type PostWithInteractions = Post & {
+    comments?: Comment[]
+    likes?: Like[]
+}
 
 /**
  * Factory para crear instancias de PostEntity desde diferentes fuentes (BD, payloads externos).
  * Encapsula la lógica de derivación de campos y mapeo.
  *
- * Este es un ejemplo del patrón Factory Method.
+ * Este es un ejemplo del patrón Factory.
  */
 export class PostFactory {
     /**
@@ -15,13 +21,14 @@ export class PostFactory {
      * @returns Entidad enriquecida con campos derivados
      */
     static fromDb(
-        raw: any,
-        rankingMode: string = "latest",
+        raw: PostWithInteractions,
+        rankingMode = "latest",
     ): PostEntity {
-        const likesCount = raw.likes?.reduce(
-            (sum: number, like: any) => sum + like.weight,
-            0,
-        ) ?? 0
+        const likesCount =
+            raw.likes?.reduce(
+                (sum: number, like: Like) => sum + like.weight,
+                0,
+            ) ?? 0
 
         const commentsCount = raw.comments?.length ?? 0
 
@@ -42,10 +49,11 @@ export class PostFactory {
 
         // Construir metadata
         const metadata = {
-            likesWeights: raw.likes?.map((like: any) => like.weight) ?? [],
+            likesWeights: raw.likes?.map((like: Like) => like.weight) ?? [],
             commentLengths:
-                raw.comments?.map((comment: any) => comment.content.length) ??
-                [],
+                raw.comments?.map(
+                    (comment: Comment) => comment.content.length,
+                ) ?? [],
             hourOfCreate: new Date(raw.createdAt).getHours(),
         }
 
