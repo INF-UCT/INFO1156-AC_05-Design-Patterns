@@ -1,55 +1,90 @@
-# Análisis de estructura y recomendaciones de diseño
+# Refactorizacion de patrones de diseno
 
-Este documento resume problemas estructurales detectados en el código y propone patrones de diseño (creacional, estructural y de comportamiento) para mejorar mantenibilidad, testabilidad y extensibilidad.
+Este documento describe la arquitectura aplicada en el modulo `posts` despues de la refactorizacion. La idea central es mantener el controlador delgado y mover la logica de negocio a servicios, adaptadores, factories y estrategias especializadas.
 
-**Resumen rápido:** el módulo `posts` contiene lógica de negocio mezclada en controladores, acoplamiento directo a un cliente de moderación legacy con tipos inconsistentes, y cálculo de ranking embebido. Recomendaciones: extraer responsabilidades al `service`, introducir adaptadores y estrategias, y usar fábricas para creación de entidades.
+## Flujo principal
 
-**Archivos clave analizados:**
-- [src/posts/posts.controller.ts](src/posts/posts.controller.ts#L1-L999)
-- [src/posts/posts.service.ts](src/posts/posts.service.ts#L1-L999)
-- [src/posts/legacy-moderation.client.ts](src/posts/legacy-moderation.client.ts#L1-L999)
-- [src/posts/posts.dtos.ts](src/posts/posts.dtos.ts#L1-L999)
-- [src/posts/entities](src/posts/entities)
+- [PostsController](../src/posts/posts.controller.ts) recibe las solicitudes HTTP y delega en `PostsService`.
+- [PostsService](../src/posts/posts.service.ts) orquesta la logica de negocio: validacion, persistencia, moderacion, factories, ranking y eventos.
+- Prisma queda encapsulado en el service como mecanismo de persistencia.
 
-**Problemas estructurales identificados**
-- **Controlador con responsabilidades múltiples:** `getFeed`, `createComment`, y endpoints relacionados combinan: acceso a BD, enriquecimiento de datos, ranking, validación adicional y llamadas a APIs externas. Ver [getFeed](src/posts/posts.controller.ts#L84-L170).
-- **Acoplamiento a cliente legacy de moderación:** `legacy-moderation.client.ts` devuelve tipos inconsistentes (strings, objetos, números). El controlador maneja la lógica de normalización. Ver [createComment](src/posts/posts.controller.ts#L217-L232) y [legacy-moderation.client.ts](src/posts/legacy-moderation.client.ts#L1-L999).
-- **Lógica de ranking y pipeline inline:** la fórmula de relevancia y el switch de ordenación están embebidos en el controlador, dificultando pruebas y extensiones. Ver [cálculo de relevancia](src/posts/posts.controller.ts#L112-L118).
-- **Entities con lógica de negocio:** las entidades mezclan datos crudos y reglas derivadas (p. ej. `relevanceScore`, `strengthLabel`) en vez de ser DTOs simples o POJOs.
-- **Validación duplicada:** existen validaciones en DTOs (decoradores) y validaciones manuales en controladores — duplicación de reglas.
+## Patrones aplicados
 
-**Consecuencias**
-- Dificultad para probar componentes aislados.
-- Alto coste al cambiar la estrategia de moderación o ranking.
-- Riesgo de errores por tipos inconsistentes del cliente legacy.
+### Service Layer
 
-**Patrones de diseño recomendados (implementación propuesta)**
+Archivo principal: [posts.service.ts](../src/posts/posts.service.ts)
 
-1) **Creacional — Factory Method (`PostFactory`)**
-- Propósito: centralizar la creación de `PostEntity`/`CommentEntity` desde datos crudos (resultados de Prisma, payloads externos) y calcular campos derivados (`relevanceScore`, `isFeatured`, `tags`) en un único lugar.
-- Beneficios: elimina duplicación de mapeo, facilita pruebas unitarias de creación y encapsula la lógica de derivación.
-- Implementación sugerida: crear `src/posts/factories/post.factory.ts` con `class PostFactory { static fromDb(row): PostEntity { ... } }`. Reemplazar todos los mapeos inline en `posts.controller.ts` por `PostFactory.fromDb(...)`.
+El controller ya no calcula rankings, no instancia entidades, no llama a Prisma directamente y no ejecuta efectos secundarios. Esa responsabilidad queda centralizada en `PostsService`, lo que reduce acoplamiento y deja los endpoints como una capa HTTP simple.
 
-2) **Estructural — Adapter (`ModerationAdapter`)**
-- Propósito: normalizar la interfaz del cliente de moderación legacy para exponer un contrato consistente (`IModerationService.moderate(text): Promise<ModerationResult>`).
-- Beneficios: desacopla el resto de la aplicación de las inconsistencias del cliente legacy y permite sustituir la implementación (mock, 3rd-party nuevo) fácilmente.
-- Implementación sugerida: crear `src/posts/adapters/moderation.adapter.ts` que envuelva `legacy-moderation.client.ts` y convierta cualquier respuesta en `{ action: 'allow'|'block'|'review', score?: number }`.
-- Integración: inyectar `ModerationAdapter` en `PostsService` o en un nuevo `ModerationService` y mover la lógica de decisión fuera del controlador.
+### Factory
 
-3) **Comportamiento — Strategy (`RankingStrategy`)**
-- Propósito: extraer algoritmos de ordenación/ranking (`hot`, `latest`, `trending`) detrás de una interfaz común `IRankingStrategy.rank(posts): Post[]`.
-- Beneficios: añadir nuevas estrategias o ajustar fórmulas sin tocar el controlador; facilita pruebas de cada estrategia por separado.
-- Implementación sugerida: carpeta `src/posts/ranking/strategies/` con `HotStrategy`, `LatestStrategy`, `TrendingStrategy`; un `RankingContext` o `RankingService` selecciona la estrategia según query param o configuración.
+Archivos:
 
-Extras y cambios de arquitectura sugeridos
-- Mover la orquestación del flujo feed al `PostsService` (fetch → enrich con `PostFactory` → moderate via `ModerationAdapter` (si aplica) → rank via `RankingStrategy` → map a DTO). El controlador debe convertirse en una capa delgada que sólo valida y delega.
-- Normalizar constantes y fórmulas en `src/posts/constants.ts` para evitar magic numbers.
-- Unificar la nomenclatura `source` y añadir un campo opcional `provenance` en las entidades para trazabilidad.
-- Simplificar `entities/*` para que sean POJOs/DTOs sin lógica; dejar la lógica derivada en `factories` o en servicios de dominio.
+- [post.factory.ts](../src/posts/factories/post.factory.ts)
+- [comment.factory.ts](../src/posts/factories/comment.factory.ts)
+- [like.factory.ts](../src/posts/factories/like.factory.ts)
 
-Propuesta de archivos a crear (esqueleto)
-- `src/posts/factories/post.factory.ts`
-- `src/posts/adapters/moderation.adapter.ts`
-- `src/posts/ranking/strategies/hot.strategy.ts`
-- `src/posts/ranking/strategies/latest.strategy.ts`
-- `src/posts/ranking/ranking.service.ts` (selección de estrategia)
+Las factories crean entidades enriquecidas a partir de datos crudos de Prisma. `PostFactory` calcula campos derivados como `likesCount`, `commentsCount`, `relevanceScore`, `isFeatured`, `tags` y `metadata`. `CommentFactory` y `LikeFactory` concentran el mapeo de comentarios y reacciones.
+
+Nota tecnica: la implementacion usa factories estaticas simples. Para este caso es suficiente y evita agregar herencia innecesaria.
+
+### Adapter
+
+Archivo principal: [adapters/moderation.adapter.ts](../src/posts/adapters/moderation.adapter.ts)
+
+`ModerationAdapter` envuelve el cliente legacy [legacy-moderation.client.ts](../src/posts/legacy-moderation.client.ts), que retorna formatos inconsistentes. El adapter normaliza esas respuestas a un contrato estable:
+
+```ts
+{
+    action: "allow" | "block" | "review",
+    score?: number,
+    reason?: string,
+}
+```
+
+El resto de la aplicacion no depende de strings, numeros u objetos legacy; solo consume el resultado normalizado.
+
+### Strategy
+
+Archivos:
+
+- [ranking.service.ts](../src/posts/ranking/ranking.service.ts)
+- [ranking.interface.ts](../src/posts/ranking/ranking.interface.ts)
+- [strategies](../src/posts/ranking/strategies)
+
+El ranking del feed se resuelve con estrategias intercambiables. `RankingService` selecciona la estrategia segun el modo recibido:
+
+- `latest`
+- `mostLiked`
+- `mostCommented`
+- `hot`
+- `relevance`
+
+Esto permite agregar nuevos criterios de ordenamiento sin modificar el controller ni mezclar switches dentro del flujo principal.
+
+### Observer
+
+Archivo principal: [post-events.observer.ts](../src/posts/post-events.observer.ts)
+
+Los efectos secundarios al crear posts, comentarios o likes se disparan mediante `postEventDispatcher`. Actualmente hay observadores para logging, notificaciones simuladas y recomputo. Esto evita que el service tenga que conocer los detalles de cada efecto.
+
+## Problemas corregidos
+
+- Se elimino logica duplicada entre controller y service.
+- Se removieron implementaciones paralelas de Adapter y Strategy.
+- El controller quedo alineado con Service Layer.
+- La creacion de entities quedo centralizada en factories.
+- El ranking del feed usa un unico `RankingService`.
+- La moderacion usa un unico `ModerationAdapter` inyectado por NestJS.
+- Los eventos de dominio usan un unico dispatcher Observer.
+
+## Estado esperado
+
+La arquitectura final queda con una sola fuente oficial por responsabilidad:
+
+- HTTP: `PostsController`
+- Orquestacion de negocio: `PostsService`
+- Creacion de entities: `factories/*`
+- Moderacion legacy: `adapters/moderation.adapter.ts`
+- Ranking: `ranking/*`
+- Eventos: `post-events.observer.ts`

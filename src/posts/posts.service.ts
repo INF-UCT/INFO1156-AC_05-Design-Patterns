@@ -1,12 +1,22 @@
-import { Injectable, BadRequestException, NotFoundException } from "@nestjs/common"
-import { AddLikeDto, CreateCommentDto, CreatePostDto, FeedQueryDto } from "@/posts/posts.dtos"
+import {
+    BadRequestException,
+    Injectable,
+    NotFoundException,
+} from "@nestjs/common"
+import {
+    AddLikeDto,
+    CreateCommentDto,
+    CreatePostDto,
+    FeedQueryDto,
+} from "@/posts/posts.dtos"
 import { PrismaService } from "@/prisma/prisma.service"
-import { PostEntity } from "@/posts/entities/post.entity"
-import { CommentEntity } from "@/posts/entities/comment.entity"
-import { LikeEntity } from "@/posts/entities/like.entity"
-import { ModerationAdapter } from "./moderation.adapter"
-import { FeedRankingContext } from "./feed-ranking.strategy"
-import { postEventDispatcher } from "./post-events.observer"
+import { ModerationAdapter } from "@/posts/adapters/moderation.adapter"
+import { RANKING_CONSTANTS, VALIDATION_CONSTANTS } from "@/posts/constants"
+import { CommentFactory } from "@/posts/factories/comment.factory"
+import { LikeFactory } from "@/posts/factories/like.factory"
+import { PostFactory } from "@/posts/factories/post.factory"
+import { postEventDispatcher } from "@/posts/post-events.observer"
+import { RankingService } from "@/posts/ranking/ranking.service"
 
 /**
  * Service Layer Pattern:
@@ -16,15 +26,30 @@ import { postEventDispatcher } from "./post-events.observer"
  */
 @Injectable()
 export class PostsService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly moderationAdapter: ModerationAdapter,
+        private readonly rankingService: RankingService,
+    ) {}
 
     async create(data: CreatePostDto) {
-        if (data.title.length < 3 || data.title.length > 120) {
-            throw new BadRequestException("Title length must be between 3 and 120")
+        if (
+            data.title.length < RANKING_CONSTANTS.TITLE_MIN_LENGTH ||
+            data.title.length > RANKING_CONSTANTS.TITLE_MAX_LENGTH
+        ) {
+            throw new BadRequestException(
+                `Title length must be between ${RANKING_CONSTANTS.TITLE_MIN_LENGTH} and ${RANKING_CONSTANTS.TITLE_MAX_LENGTH}`,
+            )
         }
 
-        if (!data.imageUrl.startsWith("http")) {
-            throw new BadRequestException("Image URL must start with http")
+        const isValidUrl = VALIDATION_CONSTANTS.IMAGE_URL_PROTOCOLS.some(
+            (protocol) => data.imageUrl.startsWith(protocol),
+        )
+
+        if (!isValidUrl) {
+            throw new BadRequestException(
+                "Image URL must start with http:// or https://",
+            )
         }
 
         const created = await this.prisma.post.create({ data })
@@ -58,40 +83,8 @@ export class PostsService {
             },
         })
 
-        const mappedPosts = posts.map((post) => {
-            const likesCount = post.likes.reduce((sum, like) => sum + like.weight, 0)
-            const commentsCount = post.comments.length
-            const hoursSinceCreated = (Date.now() - new Date(post.createdAt).getTime()) / 36_000_00
-            const relevanceScore = likesCount * 2 + commentsCount * 3 - Math.floor(hoursSinceCreated)
-
-            const tags = post.title.split(" ").filter((word) => word.length > 4)
-            const metadata = {
-                likesWeights: post.likes.map((like) => like.weight),
-                commentLengths: post.comments.map((comment) => comment.content.length),
-                hourOfCreate: new Date(post.createdAt).getHours(),
-            }
-
-            return new PostEntity(
-                post.id,
-                post.title,
-                post.description,
-                post.imageUrl,
-                post.createdAt,
-                post.updatedAt,
-                likesCount,
-                commentsCount,
-                relevanceScore,
-                relevanceScore > 20,
-                "feed-service",
-                tags,
-                metadata,
-                mode,
-            )
-        })
-
-        // Strategy Pattern Application
-        const rankingContext = new FeedRankingContext(mode)
-        const sorted = rankingContext.execute(mappedPosts)
+        const mappedPosts = posts.map((post) => PostFactory.fromDb(post, mode))
+        const sorted = this.rankingService.rank(mappedPosts, mode)
 
         return {
             mode,
@@ -111,21 +104,8 @@ export class PostsService {
             orderBy: { createdAt: "desc" },
         })
 
-        const entities = comments.map(
-            (comment) =>
-                new CommentEntity(
-                    comment.id,
-                    comment.postId,
-                    comment.content,
-                    comment.createdAt,
-                    comment.updatedAt,
-                    comment.source,
-                    "approved",
-                    comment.content.length > 80 ? 70 : 45,
-                    comment.content.length % 2 === 0,
-                    "es",
-                    { chars: comment.content.length, source: comment.source },
-                ),
+        const entities = comments.map((comment) =>
+            CommentFactory.fromDb(comment),
         )
 
         return {
@@ -144,12 +124,13 @@ export class PostsService {
             throw new BadRequestException("Comment too short")
         }
 
-        // Adapter Pattern Application
-        if (ModerationAdapter.isBlocked(data.content)) {
+        const moderationResult = await this.moderationAdapter.moderate(
+            data.content,
+        )
+
+        if (moderationResult.action === "block") {
             throw new BadRequestException("Comment blocked by moderation")
         }
-
-        const rawModeration = ModerationAdapter.getRawModeration(data.content)
 
         const created = await this.prisma.comment.create({
             data: {
@@ -159,19 +140,7 @@ export class PostsService {
             },
         })
 
-        const entity = new CommentEntity(
-            created.id,
-            created.postId,
-            created.content,
-            created.createdAt,
-            created.updatedAt,
-            created.source,
-            "approved",
-            created.content.length > 60 ? 80 : 40,
-            false,
-            "es",
-            { moderation: rawModeration, source: "legacy" },
-        )
+        const entity = CommentFactory.fromCreated(created, moderationResult)
 
         // Observer Pattern Application
         postEventDispatcher.notify({
@@ -208,17 +177,7 @@ export class PostsService {
             },
         })
 
-        const entity = new LikeEntity(
-            like.id,
-            like.postId,
-            like.reactionType,
-            like.weight,
-            like.source,
-            like.createdAt,
-            like.weight > 2 ? "strong" : "normal",
-            true,
-            { from: "manual", r: like.reactionType },
-        )
+        const entity = LikeFactory.fromDb(like)
 
         // Observer Pattern Application
         postEventDispatcher.notify({

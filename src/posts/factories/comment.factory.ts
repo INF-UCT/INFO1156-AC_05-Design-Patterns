@@ -1,4 +1,5 @@
 import type { Comment } from "@prisma/client"
+import type { IModerationResult } from "@/posts/adapters/moderation.adapter"
 import { CommentEntity } from "@/posts/entities/comment.entity"
 
 export class CommentFactory {
@@ -20,15 +21,8 @@ export class CommentFactory {
 
     static fromCreated(
         comment: Comment,
-        moderation: { action?: string } | unknown,
+        moderation: IModerationResult,
     ): CommentEntity {
-        const moderationAction =
-            typeof moderation === "object" &&
-            moderation !== null &&
-            "action" in moderation
-                ? moderation.action
-                : undefined
-
         return new CommentEntity(
             comment.id,
             comment.postId,
@@ -36,7 +30,7 @@ export class CommentFactory {
             comment.createdAt,
             comment.updatedAt,
             comment.source,
-            moderationAction === "review" ? "review" : "approved",
+            moderation.action === "review" ? "review" : "approved",
             comment.content.length > 60 ? 80 : 40,
             false,
             "es",
