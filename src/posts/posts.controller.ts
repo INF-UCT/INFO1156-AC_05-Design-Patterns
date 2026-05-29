@@ -12,7 +12,7 @@ import {
 import { CommentFactory } from "@/posts/factories/comment.factory"
 import { LikeFactory } from "@/posts/factories/like.factory"
 import { PostFactory } from "@/posts/factories/post.factory"
-import { legacyModerationApi } from "@/posts/legacy-moderation.client"
+import { LegacyModerationAdapter } from "@/posts/legacy-moderation.adapter"
 import { PrismaService } from "@/prisma/prisma.service"
 
 import { PostsService } from "@/posts/posts.service"
@@ -40,6 +40,8 @@ const fakeSendNotification = (
 const fakeRecomputeSomething = (postId: number) => {
     console.log(`[recompute] postId=${postId}`)
 }
+
+const moderationAdapter = new LegacyModerationAdapter()
 
 @Controller("api/posts")
 export class PostsController {
@@ -171,22 +173,10 @@ export class PostsController {
             throw new BadRequestException("Comment too short")
         }
 
-        // Cliente legacy: devuelve tipos mixtos (string/number/object).
-        const moderation = legacyModerationApi.review(body.content)
+        // Adapter: unifica el resultado de la API legacy en una interfaz compatible.
+        const moderation = moderationAdapter.review(body.content)
 
-        let blocked = false
-
-        if (moderation === "BLOCK") {
-            blocked = true
-        } else if (typeof moderation === "number") {
-            blocked = moderation < 1
-        } else if (typeof moderation === "object") {
-            blocked = !("pass" in moderation && moderation.pass)
-        } else if (moderation === "OK") {
-            blocked = false
-        }
-
-        if (blocked) {
+        if (moderation.blocked) {
             throw new BadRequestException("Comment blocked by moderation")
         }
 
