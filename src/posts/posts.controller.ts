@@ -10,9 +10,9 @@ import {
     Post,
     Query,
 } from "@nestjs/common"
-import { CommentEntity } from "@/posts/entities/comment.entity"
-import { LikeEntity } from "@/posts/entities/like.entity"
-import { PostEntity } from "@/posts/entities/post.entity"
+import { CommentEntityBuilder } from "@/posts/entities/builders/comment-entity.builder"
+import { LikeEntityBuilder } from "@/posts/entities/builders/like-entity.builder"
+import { PostEntityBuilder } from "@/posts/entities/builders/post-entity.builder"
 import { DomainEventPublisher } from "@/posts/events/domain-event.publisher"
 import {
     CONTENT_MODERATOR,
@@ -109,22 +109,22 @@ export class PostsController {
                 hourOfCreate: new Date(post.createdAt).getHours(),
             }
 
-            return new PostEntity(
-                post.id,
-                post.title,
-                post.description,
-                post.imageUrl,
-                post.createdAt,
-                post.updatedAt,
-                likesCount,
-                commentsCount,
-                relevanceScore,
-                relevanceScore > 20,
-                "feed-controller",
-                tags,
-                metadata,
-                mode,
-            )
+            return new PostEntityBuilder()
+                .withId(post.id)
+                .withTitle(post.title)
+                .withDescription(post.description)
+                .withImageUrl(post.imageUrl)
+                .withCreatedAt(post.createdAt)
+                .withUpdatedAt(post.updatedAt)
+                .withLikesCount(likesCount)
+                .withCommentsCount(commentsCount)
+                .withRelevanceScore(relevanceScore)
+                .withIsFeatured(relevanceScore > 20)
+                .withSource("feed-controller")
+                .withTags(tags)
+                .withMetadata(metadata)
+                .withRankingMode(mode)
+                .build()
         })
 
         // Patrón Strategy: el contexto elige y aplica la estrategia de ranking
@@ -152,19 +152,22 @@ export class PostsController {
 
         const entities = comments.map(
             (comment) =>
-                new CommentEntity(
-                    comment.id,
-                    comment.postId,
-                    comment.content,
-                    comment.createdAt,
-                    comment.updatedAt,
-                    comment.source,
-                    "approved",
-                    comment.content.length > 80 ? 70 : 45,
-                    comment.content.length % 2 === 0,
-                    "es",
-                    { chars: comment.content.length, source: comment.source },
-                ),
+                new CommentEntityBuilder()
+                    .withId(comment.id)
+                    .withPostId(comment.postId)
+                    .withContent(comment.content)
+                    .withCreatedAt(comment.createdAt)
+                    .withUpdatedAt(comment.updatedAt)
+                    .withSource(comment.source)
+                    .withModerationState("approved")
+                    .withSentimentScore(comment.content.length > 80 ? 70 : 45)
+                    .withIsPinned(comment.content.length % 2 === 0)
+                    .withLanguage("es")
+                    .withMetadata({
+                        chars: comment.content.length,
+                        source: comment.source,
+                    })
+                    .build(),
         )
 
         return {
@@ -202,19 +205,19 @@ export class PostsController {
             },
         })
 
-        const entity = new CommentEntity(
-            created.id,
-            created.postId,
-            created.content,
-            created.createdAt,
-            created.updatedAt,
-            created.source,
-            "approved",
-            created.content.length > 60 ? 80 : 40,
-            false,
-            "es",
-            { moderation: "approved", source: "legacy" },
-        )
+        const entity = new CommentEntityBuilder()
+            .withId(created.id)
+            .withPostId(created.postId)
+            .withContent(created.content)
+            .withCreatedAt(created.createdAt)
+            .withUpdatedAt(created.updatedAt)
+            .withSource(created.source)
+            .withModerationState("approved")
+            .withSentimentScore(created.content.length > 60 ? 80 : 40)
+            .withIsPinned(false)
+            .withLanguage("es")
+            .withMetadata({ moderation: "approved", source: "legacy" })
+            .build()
 
         this.events.publish({
             name: "comment.created",
@@ -253,17 +256,17 @@ export class PostsController {
             },
         })
 
-        const entity = new LikeEntity(
-            like.id,
-            like.postId,
-            like.reactionType,
-            like.weight,
-            like.source,
-            like.createdAt,
-            like.weight > 2 ? "strong" : "normal",
-            true,
-            { from: "manual", r: like.reactionType },
-        )
+        const entity = new LikeEntityBuilder()
+            .withId(like.id)
+            .withPostId(like.postId)
+            .withReactionType(like.reactionType)
+            .withWeight(like.weight)
+            .withSource(like.source)
+            .withCreatedAt(like.createdAt)
+            .withStrengthLabel(like.weight > 2 ? "strong" : "normal")
+            .withShouldAffectRelevanceScore(true)
+            .withMetadata({ from: "manual", r: like.reactionType })
+            .build()
 
         this.events.publish({
             name: "like.created",
