@@ -13,6 +13,9 @@ import {
 import { CommentEntity } from "@/posts/entities/comment.entity"
 import { LikeEntity } from "@/posts/entities/like.entity"
 import { PostEntity } from "@/posts/entities/post.entity"
+import { PostBuilder } from "@/posts/entities/post.builder"
+import { CommentBuilder } from "@/posts/entities/comment.builder"
+import { LikeBuilder } from "@/posts/entities/like.builder"
 import {
     CONTENT_MODERATOR,
     ContentModerator,
@@ -21,30 +24,13 @@ import { PrismaService } from "@/prisma/prisma.service"
 
 import { PostsService } from "@/posts/posts.service"
 import { RankingService } from "@/posts/ranking/ranking.service"
+import { PostEventsFacade } from "@/posts/events.facade"
 import {
     AddLikeDto,
     CreateCommentDto,
     CreatePostDto,
     FeedQueryDto,
 } from "@/posts/posts.dtos"
-
-const logDomainEvent = (
-    eventName: string,
-    payload: Record<string, unknown>,
-) => {
-    console.log(`[event:${eventName}]`, payload)
-}
-
-const fakeSendNotification = (
-    type: string,
-    payload: Record<string, unknown>,
-) => {
-    console.log(`[notify:${type}]`, payload)
-}
-
-const fakeRecomputeSomething = (postId: number) => {
-    console.log(`[recompute] postId=${postId}`)
-}
 
 @Controller("api/posts")
 export class PostsController {
@@ -54,6 +40,7 @@ export class PostsController {
         private readonly rankingService: RankingService,
         @Inject(CONTENT_MODERATOR)
         private readonly moderator: ContentModerator,
+        private readonly eventsFacade: PostEventsFacade,
     ) {}
 
     @Post()
@@ -70,12 +57,8 @@ export class PostsController {
 
         const created = await this.postsService.create(body)
 
-        logDomainEvent("post.created", {
-            postId: created.id,
-            title: created.title,
-        })
-        fakeSendNotification("post", { postId: created.id })
-        fakeRecomputeSomething(created.id)
+        // Patrón Facade: Se oculta la complejidad del despacho de eventos
+        this.eventsFacade.dispatchPostCreated(created.id, created.title)
 
         return {
             ok: true,
@@ -127,22 +110,20 @@ export class PostsController {
                 hourOfCreate: new Date(post.createdAt).getHours(),
             }
 
-            return new PostEntity(
-                post.id,
-                post.title,
-                post.description,
-                post.imageUrl,
-                post.createdAt,
-                post.updatedAt,
-                likesCount,
-                commentsCount,
-                relevanceScore,
-                relevanceScore > 20,
-                "feed-controller",
-                tags,
-                metadata,
-                mode,
-            )
+            // Patrón Builder: Creación fluida de la entidad evitando constructores con muchos parámetros
+            return new PostBuilder()
+                .setId(post.id)
+                .setTitle(post.title)
+                .setDescription(post.description)
+                .setImageUrl(post.imageUrl)
+                .setTimestamps(post.createdAt, post.updatedAt)
+                .setMetrics(likesCount, commentsCount)
+                .setRelevance(relevanceScore, relevanceScore > 20)
+                .setSourceInfo("feed-controller")
+                .setTags(tags)
+                .setMetadata(metadata)
+                .setRankingMode(mode)
+                .build()
         })
 
         // Patrón Strategy: el contexto elige y aplica la estrategia de ranking
@@ -168,21 +149,18 @@ export class PostsController {
             orderBy: { createdAt: "desc" },
         })
 
-        const entities = comments.map(
-            (comment) =>
-                new CommentEntity(
-                    comment.id,
-                    comment.postId,
-                    comment.content,
-                    comment.createdAt,
-                    comment.updatedAt,
-                    comment.source,
-                    "approved",
-                    comment.content.length > 80 ? 70 : 45,
-                    comment.content.length % 2 === 0,
-                    "es",
-                    { chars: comment.content.length, source: comment.source },
-                ),
+        const entities = comments.map((comment) =>
+            new CommentBuilder()
+                .setId(comment.id)
+                .setPostId(comment.postId)
+                .setContent(comment.content)
+                .setTimestamps(comment.createdAt, comment.updatedAt)
+                .setSource(comment.source)
+                .setModerationInfo("approved", comment.content.length > 80 ? 70 : 45)
+                .setIsPinned(comment.content.length % 2 === 0)
+                .setLanguage("es")
+                .setMetadata({ chars: comment.content.length, source: comment.source })
+                .build(),
         )
 
         return {
@@ -220,23 +198,19 @@ export class PostsController {
             },
         })
 
-        const entity = new CommentEntity(
-            created.id,
-            created.postId,
-            created.content,
-            created.createdAt,
-            created.updatedAt,
-            created.source,
-            "approved",
-            created.content.length > 60 ? 80 : 40,
-            false,
-            "es",
-            { moderation: "approved", source: "legacy" },
-        )
+        const entity = new CommentBuilder()
+            .setId(created.id)
+            .setPostId(created.postId)
+            .setContent(created.content)
+            .setTimestamps(created.createdAt, created.updatedAt)
+            .setSource(created.source)
+            .setModerationInfo("approved", created.content.length > 60 ? 80 : 40)
+            .setIsPinned(false)
+            .setLanguage("es")
+            .setMetadata({ moderation: "approved", source: "legacy" })
+            .build()
 
-        logDomainEvent("comment.created", { postId: id, commentId: created.id })
-        fakeSendNotification("comment", { postId: id })
-        fakeRecomputeSomething(id)
+        this.eventsFacade.dispatchCommentCreated(id, created.id)
 
         return {
             message: "comment_created",
@@ -270,21 +244,17 @@ export class PostsController {
             },
         })
 
-        const entity = new LikeEntity(
-            like.id,
-            like.postId,
-            like.reactionType,
-            like.weight,
-            like.source,
-            like.createdAt,
-            like.weight > 2 ? "strong" : "normal",
-            true,
-            { from: "manual", r: like.reactionType },
-        )
+        const entity = new LikeBuilder()
+            .setId(like.id)
+            .setPostId(like.postId)
+            .setReactionInfo(like.reactionType, like.weight)
+            .setSource(like.source)
+            .setCreatedAt(like.createdAt)
+            .setStrengthAndRelevance(like.weight > 2 ? "strong" : "normal", true)
+            .setMetadata({ from: "manual", r: like.reactionType })
+            .build()
 
-        logDomainEvent("like.created", { postId: id, likeId: like.id })
-        fakeSendNotification("like", { postId: id, reactionType })
-        fakeRecomputeSomething(id)
+        this.eventsFacade.dispatchLikeAdded(id, like.id, reactionType)
 
         return {
             success: true,
