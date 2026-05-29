@@ -58,6 +58,6 @@ export class AddLikeDto {
 export class FeedQueryDto {
     @IsOptional()
     @IsString()
-    @IsIn(["latest", "mostLiked", "mostCommented", "relevance"])
+    @IsIn(["latest", "mostLiked", "mostCommented", "relevance", "hot"])
     mode?: string
 }
