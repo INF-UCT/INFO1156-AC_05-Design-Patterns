@@ -49,3 +49,35 @@ Comandos útiles:
 
 - `make stop` para detener el contenedor
 - `make logs` para ver logs en tiempo real
+
+## Refactorización: Patrón Strategy (Módulo de Posts)
+
+Se identificó que el endpoint `/api/posts/feed` violaba el principio **Open/Closed (OCP)** de SOLID, ya que utilizaba una estructura `switch(mode)` para ordenar las publicaciones. Añadir un nuevo tipo de ordenamiento obligaba a modificar directamente el controlador.
+
+### Solución Aplicada
+Se implementó el patrón de diseño **Strategy** junto con un **Factory** para desacoplar los algoritmos de ordenamiento del flujo del controlador:
+
+1. **`FeedSortStrategy` (Interfaz):** Define el contrato unificado para todas las estrategias mediante el método `sort(posts)`.
+2. **Estrategias Concretas (`LatestStrategy`, `MostLikedStrategy`, `MostCommentedStrategy`, `RelevanceStrategy`):** Encapsulan de forma aislada la lógica matemática y de negocio de ordenación de arrays.
+3. **`FeedSortFactory` (Creador):** Centraliza el mapeo entre los strings de la query (`mode`) y sus respectivas instancias de estrategia.
+
+### Beneficios obtenidos
+- **Extensibilidad:** Para añadir un nuevo tipo de ordenamiento en el futuro, solo se debe crear una nueva clase que implemente `FeedSortStrategy` y registrarla en el Factory. El código de `PostsController` permanece intacto.
+- **Mantenibilidad:** Cada algoritmo de ordenamiento se testea y modifica en su propio archivo dedicado de forma aislada.
+- **Coexistencia:** Es 100% compatible con los `Builders` de entidades recientemente integrados por el equipo.
+
+## Refactorización: Patrón Observer (Eventos de Dominio)
+
+Se identificó que en los endpoints de mutación (`create`, `createComment`, `addLike`) del `PostsController` se repetían llamadas a efectos secundarios (side-effects) como registros de logs, envío de notificaciones y recálculo de métricas. Esto generaba código duplicado y violaba el **Principio de Responsabilidad Única (SRP)**.
+
+### Solución Aplicada
+Se implementó el patrón de diseño **Observer** mediante un bus de eventos de dominio para desacoplar las acciones principales de sus efectos secundarios:
+
+1. **`EventBus` (Sujeto/Publicador):** Un mediador centralizado (Singleton) que permite emitir eventos y registrar suscriptores.
+2. **`IEventHandler` (Interfaz):** Define el contrato estándar para cualquier observador que desee reaccionar a un evento.
+3. **Handlers Concretos (`LoggingHandler`, `NotificationHandler`, `RecomputeHandler`):** Clases independientes que actúan como observadores. Cada una tiene una única responsabilidad y reacciona de forma autónoma cuando el controlador emite eventos como `post.created`, `comment.created` o `like.created`.
+
+### Beneficios obtenidos
+- **Desacoplamiento (SRP):** El controlador ahora tiene una única responsabilidad: persistir los datos y avisar que algo ocurrió (`emit`). Ya no conoce los detalles de qué sucede después.
+- **Extensibilidad (OCP):** Para agregar un nuevo efecto secundario (por ejemplo, enviar un email), solo se necesita crear un nuevo handler y suscribirlo al bus de eventos, sin tocar ni una sola línea del controlador.
+- **Eliminación de duplicidad (DRY):** Se centralizó la lógica de los side-effects, limpiando significativamente el código de los endpoints.
