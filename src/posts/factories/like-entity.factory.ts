@@ -1,3 +1,4 @@
+import { Injectable } from "@nestjs/common"
 import { LikeBuilder } from "@/posts/entities/like.builder"
 import { LikeEntity } from "@/posts/entities/like.entity"
 
@@ -10,8 +11,9 @@ interface LikeRecord {
     createdAt: Date
 }
 
-export class LikeResponseFactory {
-    static fromCreatedRecord(like: LikeRecord): LikeEntity {
+@Injectable()
+export class LikeEntityFactory {
+    fromCreatedRecord(like: LikeRecord): LikeEntity {
         return new LikeBuilder()
             .setId(like.id)
             .setPostId(like.postId)

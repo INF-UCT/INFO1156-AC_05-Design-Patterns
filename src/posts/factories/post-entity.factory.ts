@@ -1,3 +1,4 @@
+import { Injectable } from "@nestjs/common"
 import { PostBuilder } from "@/posts/entities/post.builder"
 import { PostEntity } from "@/posts/entities/post.entity"
 
@@ -12,8 +13,9 @@ interface FeedPostRecord {
     likes: Array<{ weight: number }>
 }
 
-export class PostResponseFactory {
-    static fromFeedRecord(post: FeedPostRecord, mode: string): PostEntity {
+@Injectable()
+export class PostEntityFactory {
+    fromFeedRecord(post: FeedPostRecord, mode: string): PostEntity {
         const likesCount = post.likes.reduce(
             (sum, like) => sum + like.weight,
             0,

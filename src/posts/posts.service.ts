@@ -12,9 +12,9 @@ import {
 } from "@/posts/moderation/moderation.port"
 import { RankingService } from "@/posts/ranking/ranking.service"
 import { PostEventsFacade } from "@/posts/events.facade"
-import { PostResponseFactory } from "@/posts/factories/post-response.factory"
-import { CommentResponseFactory } from "@/posts/factories/comment-response.factory"
-import { LikeResponseFactory } from "@/posts/factories/like-response.factory"
+import { PostEntityFactory } from "@/posts/factories/post-entity.factory"
+import { CommentEntityFactory } from "@/posts/factories/comment-entity.factory"
+import { LikeEntityFactory } from "@/posts/factories/like-entity.factory"
 
 @Injectable()
 export class PostsService {
@@ -24,6 +24,9 @@ export class PostsService {
         @Inject(MODERATION_PORT)
         private readonly moderation: ModerationPort,
         private readonly eventsFacade: PostEventsFacade,
+        private readonly postEntityFactory: PostEntityFactory,
+        private readonly commentEntityFactory: CommentEntityFactory,
+        private readonly likeEntityFactory: LikeEntityFactory,
     ) {}
 
     async create(data: CreatePostDto) {
@@ -62,7 +65,7 @@ export class PostsService {
         })
 
         const mappedPosts = posts.map((post) =>
-            PostResponseFactory.fromFeedRecord(post, mode),
+            this.postEntityFactory.fromFeedRecord(post, mode),
         )
         const sorted = this.rankingService.rank(mode, mappedPosts)
 
@@ -82,7 +85,7 @@ export class PostsService {
         })
 
         return comments.map((comment) =>
-            CommentResponseFactory.fromListRecord(comment),
+            this.commentEntityFactory.fromListRecord(comment),
         )
     }
 
@@ -108,7 +111,7 @@ export class PostsService {
 
         this.eventsFacade.dispatchCommentCreated(postId, created.id)
 
-        return CommentResponseFactory.fromCreatedRecord(created)
+        return this.commentEntityFactory.fromCreatedRecord(created)
     }
 
     async addLike(postId: number, data: AddLikeDto) {
@@ -132,7 +135,7 @@ export class PostsService {
 
         this.eventsFacade.dispatchLikeAdded(postId, like.id, reactionType)
 
-        return LikeResponseFactory.fromCreatedRecord(like)
+        return this.likeEntityFactory.fromCreatedRecord(like)
     }
 
     private async ensurePostExists(postId: number) {

@@ -1,3 +1,4 @@
+import { Injectable } from "@nestjs/common"
 import { CommentBuilder } from "@/posts/entities/comment.builder"
 import { CommentEntity } from "@/posts/entities/comment.entity"
 
@@ -10,8 +11,9 @@ interface CommentRecord {
     source: string
 }
 
-export class CommentResponseFactory {
-    static fromListRecord(comment: CommentRecord): CommentEntity {
+@Injectable()
+export class CommentEntityFactory {
+    fromListRecord(comment: CommentRecord): CommentEntity {
         return new CommentBuilder()
             .setId(comment.id)
             .setPostId(comment.postId)
@@ -28,7 +30,7 @@ export class CommentResponseFactory {
             .build()
     }
 
-    static fromCreatedRecord(comment: CommentRecord): CommentEntity {
+    fromCreatedRecord(comment: CommentRecord): CommentEntity {
         return new CommentBuilder()
             .setId(comment.id)
             .setPostId(comment.postId)
