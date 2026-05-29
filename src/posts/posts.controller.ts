@@ -16,6 +16,10 @@ import { legacyModerationApi } from "@/posts/legacy-moderation.client"
 import { PrismaService } from "@/prisma/prisma.service"
 
 import { PostsService } from "@/posts/posts.service"
+import { RankingService } from "@/posts/ranking/ranking.service"
+import { ModerationAdapter } from "@/posts/adapters/moderation.adapter"
+import { PostFactory } from "@/posts/factories/post.factory"
+import { RANKING_CONSTANTS, VALIDATION_CONSTANTS } from "@/posts/constants"
 import {
     AddLikeDto,
     CreateCommentDto,
@@ -46,18 +50,29 @@ export class PostsController {
     constructor(
         private readonly postsService: PostsService,
         private readonly prisma: PrismaService,
+        private readonly rankingService: RankingService,
+        private readonly moderationAdapter: ModerationAdapter,
     ) {}
 
     @Post()
     async create(@Body() body: CreatePostDto) {
-        if (body.title.length < 3 || body.title.length > 120) {
+        if (
+            body.title.length < RANKING_CONSTANTS.TITLE_MIN_LENGTH ||
+            body.title.length > RANKING_CONSTANTS.TITLE_MAX_LENGTH
+        ) {
             throw new BadRequestException(
-                "Title length must be between 3 and 120",
+                `Title length must be between ${RANKING_CONSTANTS.TITLE_MIN_LENGTH} and ${RANKING_CONSTANTS.TITLE_MAX_LENGTH}`,
             )
         }
 
-        if (!body.imageUrl.startsWith("http")) {
-            throw new BadRequestException("Image URL must start with http")
+        const isValidUrl = VALIDATION_CONSTANTS.IMAGE_URL_PROTOCOLS.some(
+            (protocol) => body.imageUrl.startsWith(protocol),
+        )
+
+        if (!isValidUrl) {
+            throw new BadRequestException(
+                "Image URL must start with http:// or https://",
+            )
         }
 
         const created = await this.postsService.create(body)
@@ -89,88 +104,25 @@ export class PostsController {
     async getFeed(@Query() query: FeedQueryDto) {
         const mode = query.mode || "latest"
 
-        const posts = await this.prisma.post.findMany({
+        const postsData = await this.prisma.post.findMany({
             include: {
                 comments: true,
                 likes: true,
             },
         })
 
-        const mappedPosts = posts.map((post) => {
-            const likesCount = post.likes.reduce(
-                (sum, like) => sum + like.weight,
-                0,
-            )
-            const commentsCount = post.comments.length
-            // 36_000_00 = 1 hora en milisegundos.
-            const hoursSinceCreated =
-                (Date.now() - new Date(post.createdAt).getTime()) / 36_000_00
-            const relevanceScore =
-                likesCount * 2 +
-                commentsCount * 3 -
-                Math.floor(hoursSinceCreated)
+        // Usar PostFactory para enriquecer los posts
+        const enrichedPosts = postsData.map((post) =>
+            PostFactory.fromDb(post, mode),
+        )
 
-            const tags = post.title.split(" ").filter((word) => word.length > 4)
-            const metadata = {
-                likesWeights: post.likes.map((like) => like.weight),
-                commentLengths: post.comments.map(
-                    (comment) => comment.content.length,
-                ),
-                hourOfCreate: new Date(post.createdAt).getHours(),
-            }
-
-            return new PostEntity(
-                post.id,
-                post.title,
-                post.description,
-                post.imageUrl,
-                post.createdAt,
-                post.updatedAt,
-                likesCount,
-                commentsCount,
-                relevanceScore,
-                relevanceScore > 20,
-                "feed-controller",
-                tags,
-                metadata,
-                mode,
-            )
-        })
-
-        let sorted = [...mappedPosts]
-
-        // Ranking inline por modo
-        // Esto define la forma de ordenar en base al filtro
-        switch (mode) {
-            case "latest":
-                sorted = sorted.sort(
-                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-                )
-                break
-            case "mostLiked":
-                sorted = sorted.sort((a, b) => b.likesCount - a.likesCount)
-                break
-            case "mostCommented":
-                sorted = sorted.sort(
-                    (a, b) => b.commentsCount - a.commentsCount,
-                )
-                break
-            case "relevance":
-                sorted = sorted.sort(
-                    (a, b) => b.relevanceScore - a.relevanceScore,
-                )
-                break
-            default:
-                sorted = sorted.sort(
-                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-                )
-                break
-        }
+        // Usar RankingService para aplicar la estrategia de ranking
+        const ranked = this.rankingService.rank(enrichedPosts, mode)
 
         return {
             mode,
-            count: sorted.length,
-            rows: sorted,
+            count: ranked.length,
+            rows: ranked,
         }
     }
 
@@ -223,22 +175,12 @@ export class PostsController {
             throw new BadRequestException("Comment too short")
         }
 
-        // Cliente legacy: devuelve tipos mixtos (string/number/object).
-        const moderation = legacyModerationApi.review(body.content)
+        // Usar ModerationAdapter para normalizar respuesta del cliente legacy
+        const moderationResult = await this.moderationAdapter.moderate(
+            body.content,
+        )
 
-        let blocked = false
-
-        if (moderation === "BLOCK") {
-            blocked = true
-        } else if (typeof moderation === "number") {
-            blocked = moderation < 1
-        } else if (typeof moderation === "object") {
-            blocked = !("pass" in moderation && moderation.pass)
-        } else if (moderation === "OK") {
-            blocked = false
-        }
-
-        if (blocked) {
+        if (moderationResult.action === "block") {
             throw new BadRequestException("Comment blocked by moderation")
         }
 
@@ -258,11 +200,11 @@ export class PostsController {
             created.createdAt,
             created.updatedAt,
             created.source,
-            "approved",
+            moderationResult.action === "review" ? "review" : "approved",
             created.content.length > 60 ? 80 : 40,
             false,
             "es",
-            { moderation, source: "legacy" },
+            { moderation: moderationResult, source: "adapter" },
         )
 
         logDomainEvent("comment.created", { postId: id, commentId: created.id })
