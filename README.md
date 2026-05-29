@@ -1,51 +1,439 @@
-# Feed de Publicaciones
+# AC-05 Design Patterns Refactor
 
-Este proyecto implementa un feed social sencillo, sin usuarios ni autenticación, centrado en la interacción entre publicaciones, likes y comentarios. La aplicación está pensada para simular una plataforma de contenido visual con lógica de negocio realista pero acotada.
+## Objetivo
 
-## Requerimientos
+El objetivo de esta actividad fue refactorizar la arquitectura del sistema aplicando distintos patrones de diseño para mejorar:
 
-- Docker
+* separación de responsabilidades
+* mantenibilidad
+* extensibilidad
+* reutilización de código
+* desacoplamiento entre componentes
 
-## Resumen funcional
+El sistema originalmente concentraba demasiada lógica dentro de los controllers, generando código difícil de mantener y extender.
 
-El sistema permite crear publicaciones con imagen, texto y descripción, y mostrarlas en un feed central. Cada publicación puede recibir likes y comentarios, y esas interacciones modifican cómo se percibe su importancia dentro del feed.
+# Problemas Detectados
 
-El comportamiento general del producto gira alrededor de tres ideas:
+## 1. Controllers con demasiadas responsabilidades
 
-- **contenido**: las publicaciones son la unidad principal del sistema,
-- **interacción**: likes y comentarios enriquecen cada publicación,
-- **priorización**: el feed puede cambiar de orden según distintos criterios de relevancia.
+El archivo:
 
-## Lógica de negocio principal
+```txt
+src/posts/posts.controller.ts
+```
 
-La lógica del sistema no solo guarda datos, también construye una vista enriquecida del feed. Para cada publicación se calcula información derivada, como la cantidad de interacciones y una puntuación de relevancia que combina actividad reciente con volumen de participación.
+contenía:
 
-Además, antes de persistir comentarios se aplica una validación/moderación para filtrar contenido problemático. El sistema también ejecuta efectos operativos cuando se crean interacciones (por ejemplo trazas y procesos internos de recálculo), reflejando un flujo típico de aplicaciones de contenido.
+* lógica de negocio
+* acceso a base de datos
+* validaciones
+* moderación
+* construcción de entidades
+* manejo de eventos
+* algoritmos de ordenamiento
 
-## Contexto técnico
+Esto generaba:
 
-La solución está construida con NestJS en backend, Prisma ORM y SQLite como almacenamiento local.
+* alto acoplamiento
+* baja reutilización
+* dificultad de testing
+* dificultad para extender funcionalidades
 
-La base de datos es fija en `sqlite.db`
+## 2. Uso excesivo de condicionales
 
-## Ejecución:
+Existían múltiples:
 
-Para levantar todo el sistema con Docker:
+* `if`
+* `switch`
+* `else`
 
-1. `make setup`
-2. `make run`
+para manejar:
 
-Este comando construye la imagen, instala dependencias dentro del contenedor, aplica migraciones Prisma, genera el cliente y arranca NestJS en modo watch.
+* sorting del feed
+* validaciones
+* moderación
+* manejo de estados
 
-En este flujo, los artefactos de compilación y cache de paquetes se mantienen dentro de volúmenes Docker para no ensuciar el directorio del proyecto.
+Cada nueva funcionalidad obligaba a modificar código existente.
 
-La aplicación queda disponible en:
+## 3. Dependencia directa de Prisma ORM
 
-- `http://localhost:3000`
-- `http://localhost:3000/docs`
-- `http://localhost:5555` (Prisma Studio - Database Manager)
+Los controllers accedían directamente a Prisma:
 
-Comandos útiles:
+```ts
+this.prisma.post.findMany(...)
+```
 
-- `make stop` para detener el contenedor
-- `make logs` para ver logs en tiempo real
+Esto acoplaba fuertemente el sistema al ORM.
+
+## 4. API legacy de moderación inconsistente
+
+La API de moderación retornaba formatos distintos:
+
+```txt
+"BLOCK"
+1
+{ pass: true }
+```
+
+El controller debía interpretar manualmente cada respuesta.
+
+## 5. Side effects acoplados
+
+Acciones como:
+
+* logs
+* notificaciones
+* recomputaciones
+
+eran ejecutadas directamente desde controllers y services.
+
+## 6. Creación manual de entidades
+
+Muchos objetos eran construidos manualmente dentro de distintos módulos, generando:
+
+* duplicación
+* inconsistencias
+* lógica repetida
+
+# Patrones de Diseño Aplicados
+
+## 1. Strategy Pattern
+
+### Problema
+
+El feed utilizaba múltiples condicionales para decidir el algoritmo de ordenamiento:
+
+```ts
+switch(mode)
+```
+
+### Solución
+
+Se implementó el patrón Strategy para encapsular cada algoritmo de ordenamiento en clases independientes.
+
+### Estructura
+
+```txt
+FeedStrategy
+├── LatestFeedStrategy
+├── MostLikedFeedStrategy
+├── MostCommentedFeedStrategy
+└── RelevanceFeedStrategy
+```
+
+### Ejemplo
+
+```ts
+interface FeedStrategy {
+  sort(posts: Post[]): Post[];
+}
+
+class LatestFeedStrategy implements FeedStrategy {
+  sort(posts: Post[]) {
+    return posts.sort(
+      (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+    );
+  }
+}
+```
+
+### Beneficios
+
+* eliminación de `switch`
+* extensibilidad
+* bajo acoplamiento
+* mejor mantenibilidad
+
+## 2. Observer Pattern
+
+### Problema
+
+Los controllers ejecutaban directamente:
+
+* logs
+* notificaciones
+* recomputaciones
+
+Ejemplo:
+
+```ts
+fakeSendNotification()
+logDomainEvent()
+```
+
+### Solución
+
+Se implementó un sistema de eventos utilizando Observer Pattern.
+
+### Estructura
+
+```txt
+EventManager
+├── LoggerObserver
+├── NotificationObserver
+└── RecomputeObserver
+```
+
+Cuando ocurre un evento:
+
+```ts
+eventManager.notify("post.created", payload)
+```
+
+los observers reaccionan automáticamente.
+
+### Beneficios
+
+* desacoplamiento
+* separación de responsabilidades
+* extensibilidad
+
+## 3. Adapter Pattern
+
+### Problema
+
+La API legacy de moderación retornaba formatos inconsistentes:
+
+```txt
+"BLOCK"
+1
+{ pass: true }
+```
+
+### Solución
+
+Se implementó un Adapter Pattern para normalizar respuestas.
+
+### Estructura
+
+```txt
+LegacyModerationApi
+        ↓
+LegacyModerationAdapter
+        ↓
+ModerationResult
+```
+
+El adapter transforma todas las respuestas a un formato estándar:
+
+```ts
+{
+  blocked: boolean,
+  reason?: string
+}
+```
+
+### Beneficios
+
+* encapsulación de compatibilidad legacy
+* simplificación del controller
+* desacoplamiento
+
+## 4. Factory Pattern
+
+### Problema
+
+Las entidades eran creadas manualmente en distintos lugares del sistema.
+
+### Solución
+
+Se implementaron factories para centralizar la creación de objetos.
+
+### Estructura
+
+```txt
+PostFactory
+CommentFactory
+LikeFactory
+```
+
+### Ejemplo
+
+```ts
+const post = PostFactory.create(dto)
+```
+
+### Beneficios
+
+* reducción de duplicación
+* creación consistente
+* mejor mantenibilidad
+
+## 5. Repository Pattern
+
+### Problema
+
+Los controllers accedían directamente a Prisma ORM.
+
+### Solución
+
+Se implementaron repositories para encapsular las consultas a base de datos.
+
+### Estructura
+
+```txt
+PostsRepository
+CommentsRepository
+LikesRepository
+```
+
+### Ejemplo
+
+```ts
+const posts = await postsRepository.findAll()
+```
+
+### Beneficios
+
+* desacoplamiento del ORM
+* reutilización de queries
+* mejor testing
+
+## 6. Service Layer Pattern
+
+### Problema
+
+La lógica de negocio estaba mezclada con la lógica HTTP.
+
+### Solución
+
+Se creó una capa de servicios encargada exclusivamente de la lógica de negocio.
+
+### Flujo
+
+```txt
+Controller
+    ↓
+Service
+    ↓
+Repository
+    ↓
+Prisma ORM
+```
+
+### Beneficios
+
+* controllers más limpios
+* mejor organización
+* separación de responsabilidades
+
+## 7. Chain of Responsibility Pattern
+
+### Problema
+
+Las validaciones estaban implementadas mediante múltiples condicionales anidados.
+
+### Solución
+
+Se implementó una cadena de validadores independientes.
+
+### Estructura
+
+```txt
+LengthValidator
+    ↓
+SpamValidator
+    ↓
+ProfanityValidator
+    ↓
+ModerationValidator
+```
+
+Cada validator:
+
+* procesa la validación
+* pasa el control al siguiente validator
+
+### Beneficios
+
+* extensibilidad
+* eliminación de `if` complejos
+* validaciones desacopladas
+
+## 8. Mapper Pattern
+
+### Problema
+
+Las transformaciones entre DTOs, entidades y respuestas API estaban repetidas en distintos lugares.
+
+### Solución
+
+Se implementaron mappers especializados.
+
+### Estructura
+
+```txt
+PostMapper
+CommentMapper
+LikeMapper
+```
+
+### Ejemplo
+
+```ts
+const response = PostMapper.toResponse(post)
+```
+
+### Beneficios
+
+* reutilización
+* consistencia
+* menos duplicación
+
+## 9. Command Pattern
+
+### Problema
+
+Las operaciones complejas eran ejecutadas directamente desde controllers y services.
+
+### Solución
+
+Se encapsularon operaciones en comandos independientes.
+
+### Estructura
+
+```txt
+CreatePostCommand
+CreateCommentCommand
+LikePostCommand
+```
+
+Cada comando implementa:
+
+```ts
+execute()
+```
+
+### Ejemplo
+
+```ts
+await command.execute()
+```
+
+### Beneficios
+
+* encapsulación de acciones
+* mejor organización
+* facilidad de testing
+
+# Arquitectura Final
+
+```txt
+Controller
+    ↓
+Service Layer
+    ↓
+Commands / Strategies / Validators
+    ↓
+Repositories
+    ↓
+Prisma ORM
+```
+
+Además:
+
+* Observer maneja eventos
+* Factory crea entidades
+* Mapper transforma datos
+* Adapter encapsula APIs legacy
