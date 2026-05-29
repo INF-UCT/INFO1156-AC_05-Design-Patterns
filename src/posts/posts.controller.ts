@@ -9,12 +9,7 @@ import {
     Post,
     Query,
 } from "@nestjs/common"
-import { CommentEntity } from "@/posts/entities/comment.entity"
-import { LikeEntity } from "@/posts/entities/like.entity"
-import { PostEntity } from "@/posts/entities/post.entity"
-import { legacyModerationApi } from "@/posts/legacy-moderation.client"
 import { PrismaService } from "@/prisma/prisma.service"
-
 import { PostsService } from "@/posts/posts.service"
 import {
     AddLikeDto,
@@ -22,6 +17,17 @@ import {
     CreatePostDto,
     FeedQueryDto,
 } from "@/posts/posts.dtos"
+
+// Adapter
+import { LegacyModerationAdapter } from "@/posts/adapters/moderation.adapter"
+
+// Strategy
+import { FeedStrategyContext } from "@/posts/strategies/feed-strategy.context"
+
+// Builders
+import { PostEntityBuilder } from "@/posts/builders/post-entity.builder"
+import { CommentEntityBuilder } from "@/posts/builders/comment-entity.builder"
+import { LikeEntityBuilder } from "@/posts/builders/like-entity.builder"
 
 const logDomainEvent = (
     eventName: string,
@@ -46,6 +52,10 @@ export class PostsController {
     constructor(
         private readonly postsService: PostsService,
         private readonly prisma: PrismaService,
+        // Adapter: normaliza la interfaz incompatible del cliente legacy
+        private readonly moderationAdapter: LegacyModerationAdapter,
+        // Strategy: encapsula los distintos algoritmos de ordenamiento del feed
+        private readonly feedStrategyContext: FeedStrategyContext,
     ) {}
 
     @Post()
@@ -96,76 +106,14 @@ export class PostsController {
             },
         })
 
-        const mappedPosts = posts.map((post) => {
-            const likesCount = post.likes.reduce(
-                (sum, like) => sum + like.weight,
-                0,
-            )
-            const commentsCount = post.comments.length
-            // 36_000_00 = 1 hora en milisegundos.
-            const hoursSinceCreated =
-                (Date.now() - new Date(post.createdAt).getTime()) / 36_000_00
-            const relevanceScore =
-                likesCount * 2 +
-                commentsCount * 3 -
-                Math.floor(hoursSinceCreated)
+        // Builder: construye cada PostEntity de forma consistente y centralizada
+        const mappedPosts = posts.map((post) =>
+            new PostEntityBuilder(post).withMode(mode).build(),
+        )
 
-            const tags = post.title.split(" ").filter((word) => word.length > 4)
-            const metadata = {
-                likesWeights: post.likes.map((like) => like.weight),
-                commentLengths: post.comments.map(
-                    (comment) => comment.content.length,
-                ),
-                hourOfCreate: new Date(post.createdAt).getHours(),
-            }
-
-            return new PostEntity(
-                post.id,
-                post.title,
-                post.description,
-                post.imageUrl,
-                post.createdAt,
-                post.updatedAt,
-                likesCount,
-                commentsCount,
-                relevanceScore,
-                relevanceScore > 20,
-                "feed-controller",
-                tags,
-                metadata,
-                mode,
-            )
-        })
-
-        let sorted = [...mappedPosts]
-
-        // Ranking inline por modo
-        // Esto define la forma de ordenar en base al filtro
-        switch (mode) {
-            case "latest":
-                sorted = sorted.sort(
-                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-                )
-                break
-            case "mostLiked":
-                sorted = sorted.sort((a, b) => b.likesCount - a.likesCount)
-                break
-            case "mostCommented":
-                sorted = sorted.sort(
-                    (a, b) => b.commentsCount - a.commentsCount,
-                )
-                break
-            case "relevance":
-                sorted = sorted.sort(
-                    (a, b) => b.relevanceScore - a.relevanceScore,
-                )
-                break
-            default:
-                sorted = sorted.sort(
-                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-                )
-                break
-        }
+        // Strategy: delega el ordenamiento a la estrategia correspondiente al modo
+        const strategy = this.feedStrategyContext.resolve(mode)
+        const sorted = strategy.sort(mappedPosts)
 
         return {
             mode,
@@ -186,21 +134,11 @@ export class PostsController {
             orderBy: { createdAt: "desc" },
         })
 
-        const entities = comments.map(
-            (comment) =>
-                new CommentEntity(
-                    comment.id,
-                    comment.postId,
-                    comment.content,
-                    comment.createdAt,
-                    comment.updatedAt,
-                    comment.source,
-                    "approved",
-                    comment.content.length > 80 ? 70 : 45,
-                    comment.content.length % 2 === 0,
-                    "es",
-                    { chars: comment.content.length, source: comment.source },
-                ),
+        // Builder: centraliza la construcción de CommentEntity
+        const entities = comments.map((comment) =>
+            new CommentEntityBuilder(comment)
+                .withSource(comment.source)
+                .build(),
         )
 
         return {
@@ -223,26 +161,13 @@ export class PostsController {
             throw new BadRequestException("Comment too short")
         }
 
-        // Cliente legacy: devuelve tipos mixtos (string/number/object).
-        const moderation = legacyModerationApi.review(body.content)
+        // Adapter: oculta los tipos de retorno mixtos del cliente legacy
+        const moderation = this.moderationAdapter.review(body.content)
 
-        let blocked = false
-
-        if (moderation === "BLOCK") {
-            blocked = true
-        } else if (typeof moderation === "number") {
-            blocked = moderation < 1
-        } else if (typeof moderation === "object") {
-            blocked = !("pass" in moderation && moderation.pass)
-        } else if (moderation === "OK") {
-            blocked = false
-        }
-
-        if (blocked) {
+        if (moderation.blocked) {
             throw new BadRequestException("Comment blocked by moderation")
         }
 
-        // Se persiste la información en la base de datos
         const created = await this.prisma.comment.create({
             data: {
                 postId: id,
@@ -251,19 +176,12 @@ export class PostsController {
             },
         })
 
-        const entity = new CommentEntity(
-            created.id,
-            created.postId,
-            created.content,
-            created.createdAt,
-            created.updatedAt,
-            created.source,
-            "approved",
-            created.content.length > 60 ? 80 : 40,
-            false,
-            "es",
-            { moderation, source: "legacy" },
-        )
+        // Builder: construye CommentEntity con metadatos de moderación
+        const entity = new CommentEntityBuilder(created)
+            .withSource(created.source)
+            .withModerationState("approved")
+            .withMetadata({ moderation: moderation.reason, source: "legacy" })
+            .build()
 
         logDomainEvent("comment.created", { postId: id, commentId: created.id })
         fakeSendNotification("comment", { postId: id })
@@ -301,17 +219,8 @@ export class PostsController {
             },
         })
 
-        const entity = new LikeEntity(
-            like.id,
-            like.postId,
-            like.reactionType,
-            like.weight,
-            like.source,
-            like.createdAt,
-            like.weight > 2 ? "strong" : "normal",
-            true,
-            { from: "manual", r: like.reactionType },
-        )
+        // Builder: construye LikeEntity de forma consistente
+        const entity = new LikeEntityBuilder(like).build()
 
         logDomainEvent("like.created", { postId: id, likeId: like.id })
         fakeSendNotification("like", { postId: id, reactionType })
