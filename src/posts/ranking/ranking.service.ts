@@ -19,6 +19,7 @@ export class RankingService {
     constructor() {
         // Registrar estrategias disponibles
         this.strategies.set("hot", new HotStrategy())
+        this.strategies.set("relevance", new HotStrategy())
         this.strategies.set("latest", new LatestStrategy())
         this.strategies.set("mostLiked", new MostLikedStrategy())
         this.strategies.set("mostCommented", new MostCommentedStrategy())
@@ -27,14 +28,16 @@ export class RankingService {
     /**
      * Aplica la estrategia de ranking especificada
      * @param posts - Posts a rankear
-     * @param mode - Modo de ranking (hot, latest, mostLiked, mostCommented)
+     * @param mode - Modo de ranking (hot, relevance, latest, mostLiked, mostCommented)
      * @returns Posts ordenados según la estrategia
      */
     rank(posts: PostEntity[], mode: string = "latest"): PostEntity[] {
         const strategy = this.strategies.get(mode)
 
         if (!strategy) {
-            console.warn(`Modo de ranking desconocido: ${mode}. Usando 'latest'`)
+            console.warn(
+                `Modo de ranking desconocido: ${mode}. Usando 'latest'`,
+            )
             return this.strategies.get("latest")!.rank(posts)
         }
 
