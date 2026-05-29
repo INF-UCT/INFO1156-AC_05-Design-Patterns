@@ -1,49 +1,69 @@
-import type { Comment, Like, Post } from "@prisma/client"
 import { PostEntity } from "@/posts/entities/post.entity"
+import { RANKING_CONSTANTS } from "@/posts/constants"
 
-type PostWithInteractions = Post & {
-    comments: Comment[]
-    likes: Like[]
-}
-
-const ONE_HOUR_IN_MS = 36_000_00
-
+/**
+ * Factory para crear instancias de PostEntity desde diferentes fuentes (BD, payloads externos).
+ * Encapsula la lógica de derivación de campos y mapeo.
+ *
+ * Este es un ejemplo del patrón Factory Method.
+ */
 export class PostFactory {
-    static fromDb(post: PostWithInteractions, mode: string): PostEntity {
-        const likesCount = post.likes.reduce(
-            (sum, like) => sum + like.weight,
+    /**
+     * Crea una PostEntity enriquecida desde datos crudos de Prisma
+     * @param raw - Datos crudos de la base de datos incluyendo likes y comments
+     * @param rankingMode - Modo de ranking aplicado (para metadata)
+     * @returns Entidad enriquecida con campos derivados
+     */
+    static fromDb(
+        raw: any,
+        rankingMode: string = "latest",
+    ): PostEntity {
+        const likesCount = raw.likes?.reduce(
+            (sum: number, like: any) => sum + like.weight,
             0,
-        )
-        const commentsCount = post.comments.length
-        const hoursSinceCreated =
-            (Date.now() - new Date(post.createdAt).getTime()) / ONE_HOUR_IN_MS
-        const relevanceScore =
-            likesCount * 2 + commentsCount * 3 - Math.floor(hoursSinceCreated)
+        ) ?? 0
 
-        const tags = post.title.split(" ").filter((word) => word.length > 4)
+        const commentsCount = raw.comments?.length ?? 0
+
+        // Calcular relevance score
+        const hoursSinceCreated =
+            (Date.now() - new Date(raw.createdAt).getTime()) /
+            RANKING_CONSTANTS.HOUR_IN_MS
+
+        const relevanceScore =
+            likesCount * RANKING_CONSTANTS.LIKE_WEIGHT +
+            commentsCount * RANKING_CONSTANTS.COMMENT_WEIGHT -
+            Math.floor(hoursSinceCreated)
+
+        // Extraer tags del título (palabras > 4 caracteres)
+        const tags = raw.title
+            .split(" ")
+            .filter((word: string) => word.length > 4)
+
+        // Construir metadata
         const metadata = {
-            likesWeights: post.likes.map((like) => like.weight),
-            commentLengths: post.comments.map(
-                (comment) => comment.content.length,
-            ),
-            hourOfCreate: new Date(post.createdAt).getHours(),
+            likesWeights: raw.likes?.map((like: any) => like.weight) ?? [],
+            commentLengths:
+                raw.comments?.map((comment: any) => comment.content.length) ??
+                [],
+            hourOfCreate: new Date(raw.createdAt).getHours(),
         }
 
         return new PostEntity(
-            post.id,
-            post.title,
-            post.description,
-            post.imageUrl,
-            post.createdAt,
-            post.updatedAt,
+            raw.id,
+            raw.title,
+            raw.description,
+            raw.imageUrl,
+            raw.createdAt,
+            raw.updatedAt,
             likesCount,
             commentsCount,
             relevanceScore,
-            relevanceScore > 20,
-            "feed-controller",
+            relevanceScore > RANKING_CONSTANTS.FEATURED_THRESHOLD,
+            "post-factory",
             tags,
             metadata,
-            mode,
+            rankingMode,
         )
     }
 }

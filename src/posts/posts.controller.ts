@@ -16,6 +16,10 @@ import { LegacyModerationAdapter } from "@/posts/legacy-moderation.adapter"
 import { PrismaService } from "@/prisma/prisma.service"
 
 import { PostsService } from "@/posts/posts.service"
+import { RankingService } from "@/posts/ranking/ranking.service"
+import { ModerationAdapter } from "@/posts/adapters/moderation.adapter"
+import { PostFactory } from "@/posts/factories/post.factory"
+import { RANKING_CONSTANTS, VALIDATION_CONSTANTS } from "@/posts/constants"
 import {
     AddLikeDto,
     CreateCommentDto,
@@ -48,18 +52,29 @@ export class PostsController {
     constructor(
         private readonly postsService: PostsService,
         private readonly prisma: PrismaService,
+        private readonly rankingService: RankingService,
+        private readonly moderationAdapter: ModerationAdapter,
     ) {}
 
     @Post()
     async create(@Body() body: CreatePostDto) {
-        if (body.title.length < 3 || body.title.length > 120) {
+        if (
+            body.title.length < RANKING_CONSTANTS.TITLE_MIN_LENGTH ||
+            body.title.length > RANKING_CONSTANTS.TITLE_MAX_LENGTH
+        ) {
             throw new BadRequestException(
-                "Title length must be between 3 and 120",
+                `Title length must be between ${RANKING_CONSTANTS.TITLE_MIN_LENGTH} and ${RANKING_CONSTANTS.TITLE_MAX_LENGTH}`,
             )
         }
 
-        if (!body.imageUrl.startsWith("http")) {
-            throw new BadRequestException("Image URL must start with http")
+        const isValidUrl = VALIDATION_CONSTANTS.IMAGE_URL_PROTOCOLS.some(
+            (protocol) => body.imageUrl.startsWith(protocol),
+        )
+
+        if (!isValidUrl) {
+            throw new BadRequestException(
+                "Image URL must start with http:// or https://",
+            )
         }
 
         const created = await this.postsService.create(body)
@@ -91,49 +106,25 @@ export class PostsController {
     async getFeed(@Query() query: FeedQueryDto) {
         const mode = query.mode || "latest"
 
-        const posts = await this.prisma.post.findMany({
+        const postsData = await this.prisma.post.findMany({
             include: {
                 comments: true,
                 likes: true,
             },
         })
 
-        const mappedPosts = posts.map((post) => PostFactory.fromDb(post, mode))
+        // Usar PostFactory para enriquecer los posts
+        const enrichedPosts = postsData.map((post) =>
+            PostFactory.fromDb(post, mode),
+        )
 
-        let sorted = [...mappedPosts]
-
-        // Ranking inline por modo
-        // Esto define la forma de ordenar en base al filtro
-        switch (mode) {
-            case "latest":
-                sorted = sorted.sort(
-                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-                )
-                break
-            case "mostLiked":
-                sorted = sorted.sort((a, b) => b.likesCount - a.likesCount)
-                break
-            case "mostCommented":
-                sorted = sorted.sort(
-                    (a, b) => b.commentsCount - a.commentsCount,
-                )
-                break
-            case "relevance":
-                sorted = sorted.sort(
-                    (a, b) => b.relevanceScore - a.relevanceScore,
-                )
-                break
-            default:
-                sorted = sorted.sort(
-                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-                )
-                break
-        }
+        // Usar RankingService para aplicar la estrategia de ranking
+        const ranked = this.rankingService.rank(enrichedPosts, mode)
 
         return {
             mode,
-            count: sorted.length,
-            rows: sorted,
+            count: ranked.length,
+            rows: ranked,
         }
     }
 
@@ -173,10 +164,12 @@ export class PostsController {
             throw new BadRequestException("Comment too short")
         }
 
-        // Adapter: unifica el resultado de la API legacy en una interfaz compatible.
-        const moderation = moderationAdapter.review(body.content)
+        // Usar ModerationAdapter para normalizar respuesta del cliente legacy
+        const moderationResult = await this.moderationAdapter.moderate(
+            body.content,
+        )
 
-        if (moderation.blocked) {
+        if (moderationResult.action === "block") {
             throw new BadRequestException("Comment blocked by moderation")
         }
 
@@ -189,7 +182,19 @@ export class PostsController {
             },
         })
 
-        const entity = CommentFactory.fromCreated(created, moderation)
+        const entity = new CommentEntity(
+            created.id,
+            created.postId,
+            created.content,
+            created.createdAt,
+            created.updatedAt,
+            created.source,
+            moderationResult.action === "review" ? "review" : "approved",
+            created.content.length > 60 ? 80 : 40,
+            false,
+            "es",
+            { moderation: moderationResult, source: "adapter" },
+        )
 
         logDomainEvent("comment.created", { postId: id, commentId: created.id })
         fakeSendNotification("comment", { postId: id })
