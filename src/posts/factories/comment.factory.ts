@@ -18,7 +18,17 @@ export class CommentFactory {
         )
     }
 
-    static fromCreated(comment: Comment, moderation: unknown): CommentEntity {
+    static fromCreated(
+        comment: Comment,
+        moderation: { action?: string } | unknown,
+    ): CommentEntity {
+        const moderationAction =
+            typeof moderation === "object" &&
+            moderation !== null &&
+            "action" in moderation
+                ? moderation.action
+                : undefined
+
         return new CommentEntity(
             comment.id,
             comment.postId,
@@ -26,11 +36,11 @@ export class CommentFactory {
             comment.createdAt,
             comment.updatedAt,
             comment.source,
-            "approved",
+            moderationAction === "review" ? "review" : "approved",
             comment.content.length > 60 ? 80 : 40,
             false,
             "es",
-            { moderation, source: "legacy" },
+            { moderation, source: "adapter" },
         )
     }
 }

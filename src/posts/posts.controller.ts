@@ -12,13 +12,11 @@ import {
 import { CommentFactory } from "@/posts/factories/comment.factory"
 import { LikeFactory } from "@/posts/factories/like.factory"
 import { PostFactory } from "@/posts/factories/post.factory"
-import { LegacyModerationAdapter } from "@/posts/legacy-moderation.adapter"
 import { PrismaService } from "@/prisma/prisma.service"
 
 import { PostsService } from "@/posts/posts.service"
 import { RankingService } from "@/posts/ranking/ranking.service"
 import { ModerationAdapter } from "@/posts/adapters/moderation.adapter"
-import { PostFactory } from "@/posts/factories/post.factory"
 import { RANKING_CONSTANTS, VALIDATION_CONSTANTS } from "@/posts/constants"
 import {
     AddLikeDto,
@@ -44,8 +42,6 @@ const fakeSendNotification = (
 const fakeRecomputeSomething = (postId: number) => {
     console.log(`[recompute] postId=${postId}`)
 }
-
-const moderationAdapter = new LegacyModerationAdapter()
 
 @Controller("api/posts")
 export class PostsController {
@@ -182,19 +178,7 @@ export class PostsController {
             },
         })
 
-        const entity = new CommentEntity(
-            created.id,
-            created.postId,
-            created.content,
-            created.createdAt,
-            created.updatedAt,
-            created.source,
-            moderationResult.action === "review" ? "review" : "approved",
-            created.content.length > 60 ? 80 : 40,
-            false,
-            "es",
-            { moderation: moderationResult, source: "adapter" },
-        )
+        const entity = CommentFactory.fromCreated(created, moderationResult)
 
         logDomainEvent("comment.created", { postId: id, commentId: created.id })
         fakeSendNotification("comment", { postId: id })

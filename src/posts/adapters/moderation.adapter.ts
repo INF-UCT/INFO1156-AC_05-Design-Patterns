@@ -50,11 +50,17 @@ export class ModerationAdapter {
         // Si es un string
         if (typeof legacyResult === "string") {
             const lower = legacyResult.toLowerCase()
-            if (lower === "spam" || lower === "blocked") {
-                return { action: "block", reason: `Contenido bloqueado: ${legacyResult}` }
+            if (lower === "spam" || lower === "block" || lower === "blocked") {
+                return {
+                    action: "block",
+                    reason: `Contenido bloqueado: ${legacyResult}`,
+                }
             }
             if (lower === "review" || lower === "flagged") {
-                return { action: "review", reason: `Requiere revisión: ${legacyResult}` }
+                return {
+                    action: "review",
+                    reason: `Requiere revisión: ${legacyResult}`,
+                }
             }
             return { action: "allow" }
         }
