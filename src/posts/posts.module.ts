@@ -1,7 +1,7 @@
 import { Module } from "@nestjs/common"
 import { PostsController } from "@/posts/posts.controller"
 import { PostsService } from "@/posts/posts.service"
-import { CONTENT_MODERATOR } from "@/posts/moderation/content-moderator.interface"
+import { MODERATION_PORT } from "@/posts/moderation/moderation.port"
 import { LegacyModerationAdapter } from "@/posts/moderation/legacy-moderation.adapter"
 import { RankingService } from "@/posts/ranking/ranking.service"
 import { PostEventsFacade } from "@/posts/events.facade"
@@ -12,7 +12,7 @@ import { PostEventsFacade } from "@/posts/events.facade"
         PostsService,
         RankingService,
         PostEventsFacade,
-        { provide: CONTENT_MODERATOR, useClass: LegacyModerationAdapter },
+        { provide: MODERATION_PORT, useClass: LegacyModerationAdapter },
     ],
 })
 export class PostsModule {}

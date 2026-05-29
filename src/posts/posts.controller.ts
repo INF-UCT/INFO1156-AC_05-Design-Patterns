@@ -17,9 +17,9 @@ import { PostBuilder } from "@/posts/entities/post.builder"
 import { CommentBuilder } from "@/posts/entities/comment.builder"
 import { LikeBuilder } from "@/posts/entities/like.builder"
 import {
-    CONTENT_MODERATOR,
-    ContentModerator,
-} from "@/posts/moderation/content-moderator.interface"
+    MODERATION_PORT,
+    ModerationPort,
+} from "@/posts/moderation/moderation.port"
 import { PrismaService } from "@/prisma/prisma.service"
 
 import { PostsService } from "@/posts/posts.service"
@@ -38,8 +38,8 @@ export class PostsController {
         private readonly postsService: PostsService,
         private readonly prisma: PrismaService,
         private readonly rankingService: RankingService,
-        @Inject(CONTENT_MODERATOR)
-        private readonly moderator: ContentModerator,
+        @Inject(MODERATION_PORT)
+        private readonly moderation: ModerationPort,
         private readonly eventsFacade: PostEventsFacade,
     ) {}
 
@@ -183,9 +183,8 @@ export class PostsController {
             throw new BadRequestException("Comment too short")
         }
 
-        // Patrón Adapter: el moderador expone una interfaz uniforme; el detalle
-        // de los tipos mixtos del cliente legacy queda oculto tras el adaptador.
-        if (this.moderator.isBlocked(body.content)) {
+        const moderationReview = this.moderation.reviewComment(body.content)
+        if (moderationReview.blocked) {
             throw new BadRequestException("Comment blocked by moderation")
         }
 

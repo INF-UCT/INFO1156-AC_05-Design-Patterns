@@ -1,31 +1,40 @@
 import { Injectable } from "@nestjs/common"
 import { legacyModerationApi } from "@/posts/legacy-moderation.client"
-import { ContentModerator } from "@/posts/moderation/content-moderator.interface"
+import {
+    ModerationPort,
+    ModerationReview,
+} from "@/posts/moderation/moderation.port"
 
 /**
- * Patrón Adapter: adapta el cliente legacy `legacyModerationApi` —que devuelve
- * tipos mixtos (string | number | object)— a la interfaz uniforme
- * ContentModerator. Toda la inspección de tipos queda encapsulada aquí, de modo
- * que el controller solo trabaja con un boolean y nunca conoce el formato legacy.
+ * Patron Adapter: adapta el cliente legacy `legacyModerationApi`, que devuelve
+ * tipos mixtos, a una respuesta estable para el resto de la aplicacion.
  */
 @Injectable()
-export class LegacyModerationAdapter implements ContentModerator {
-    isBlocked(content: string): boolean {
-        const result = legacyModerationApi.review(content)
+export class LegacyModerationAdapter implements ModerationPort {
+    reviewComment(content: string): ModerationReview {
+        const rawResult = legacyModerationApi.review(content)
 
+        return {
+            blocked: this.isBlocked(rawResult),
+            rawResult,
+        }
+    }
+
+    private isBlocked(result: unknown): boolean {
         if (result === "BLOCK") {
             return true
+        }
+
+        if (typeof result === "object") {
+            const objectResult = result as { pass?: unknown } | null
+
+            return objectResult?.pass !== true
         }
 
         if (typeof result === "number") {
             return result < 1
         }
 
-        if (typeof result === "object") {
-            return !("pass" in result && result.pass)
-        }
-
-        // "OK" o cualquier otra respuesta de texto: no se bloquea.
         return false
     }
 }
