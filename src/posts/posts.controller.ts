@@ -13,6 +13,7 @@ import {
 import { CommentEntity } from "@/posts/entities/comment.entity"
 import { LikeEntity } from "@/posts/entities/like.entity"
 import { PostEntity } from "@/posts/entities/post.entity"
+import { DomainEventPublisher } from "@/posts/events/domain-event.publisher"
 import {
     CONTENT_MODERATOR,
     ContentModerator,
@@ -28,24 +29,6 @@ import {
     FeedQueryDto,
 } from "@/posts/posts.dtos"
 
-const logDomainEvent = (
-    eventName: string,
-    payload: Record<string, unknown>,
-) => {
-    console.log(`[event:${eventName}]`, payload)
-}
-
-const fakeSendNotification = (
-    type: string,
-    payload: Record<string, unknown>,
-) => {
-    console.log(`[notify:${type}]`, payload)
-}
-
-const fakeRecomputeSomething = (postId: number) => {
-    console.log(`[recompute] postId=${postId}`)
-}
-
 @Controller("api/posts")
 export class PostsController {
     constructor(
@@ -54,6 +37,7 @@ export class PostsController {
         private readonly rankingService: RankingService,
         @Inject(CONTENT_MODERATOR)
         private readonly moderator: ContentModerator,
+        private readonly events: DomainEventPublisher,
     ) {}
 
     @Post()
@@ -70,12 +54,10 @@ export class PostsController {
 
         const created = await this.postsService.create(body)
 
-        logDomainEvent("post.created", {
-            postId: created.id,
-            title: created.title,
+        this.events.publish({
+            name: "post.created",
+            payload: { postId: created.id, title: created.title },
         })
-        fakeSendNotification("post", { postId: created.id })
-        fakeRecomputeSomething(created.id)
 
         return {
             ok: true,
@@ -234,9 +216,10 @@ export class PostsController {
             { moderation: "approved", source: "legacy" },
         )
 
-        logDomainEvent("comment.created", { postId: id, commentId: created.id })
-        fakeSendNotification("comment", { postId: id })
-        fakeRecomputeSomething(id)
+        this.events.publish({
+            name: "comment.created",
+            payload: { postId: id, commentId: created.id },
+        })
 
         return {
             message: "comment_created",
@@ -282,9 +265,10 @@ export class PostsController {
             { from: "manual", r: like.reactionType },
         )
 
-        logDomainEvent("like.created", { postId: id, likeId: like.id })
-        fakeSendNotification("like", { postId: id, reactionType })
-        fakeRecomputeSomething(id)
+        this.events.publish({
+            name: "like.created",
+            payload: { postId: id, likeId: like.id, reactionType },
+        })
 
         return {
             success: true,
