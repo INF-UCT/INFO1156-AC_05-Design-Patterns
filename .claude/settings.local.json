@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Test-Path *)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); where.exe git 2>$null; if \\($LASTEXITCODE -eq 0\\) { git --version } else { Write-Output \"git no encontrado\" })",
+      "PowerShell(git *)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\",\"Machine\"\\)+\";\"+[System.Environment]::GetEnvironmentVariable\\(\"PATH\",\"User\"\\); cd \"C:\\\\Users\\\\Alumno\\\\Desktop\\\\INFO1156-AC_05-Design-Patterns-GrupoOtraSeccion-main\"; npx nest build 2>&1 | Select-Object -Last 30)",
+      "PowerShell(Get-Command *)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\",\"Machine\"\\)+\";\"+[System.Environment]::GetEnvironmentVariable\\(\"PATH\",\"User\"\\); cd \"C:\\\\Users\\\\Alumno\\\\Desktop\\\\INFO1156-AC_05-Design-Patterns-GrupoOtraSeccion-main\"; node --version; if \\(Test-Path \"node_modules\\\\.bin\\\\tsc\"\\) { node node_modules\\\\.bin\\\\tsc --noEmit 2>&1 | Select-Object -Last 20 } else { Write-Output \"node_modules no instalados\" })"
+    ]
+  }
+}
