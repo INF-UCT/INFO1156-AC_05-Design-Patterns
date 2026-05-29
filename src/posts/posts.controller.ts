@@ -9,10 +9,10 @@ import {
     Post,
     Query,
 } from "@nestjs/common"
-import { CommentEntity } from "@/posts/entities/comment.entity"
-import { LikeEntity } from "@/posts/entities/like.entity"
-import { PostEntity } from "@/posts/entities/post.entity"
-import { legacyModerationApi } from "@/posts/legacy-moderation.client"
+import { CommentFactory } from "@/posts/factories/comment.factory"
+import { LikeFactory } from "@/posts/factories/like.factory"
+import { PostFactory } from "@/posts/factories/post.factory"
+import { LegacyModerationAdapter } from "@/posts/legacy-moderation.adapter"
 import { PrismaService } from "@/prisma/prisma.service"
 
 import { PostsService } from "@/posts/posts.service"
@@ -44,6 +44,8 @@ const fakeSendNotification = (
 const fakeRecomputeSomething = (postId: number) => {
     console.log(`[recompute] postId=${postId}`)
 }
+
+const moderationAdapter = new LegacyModerationAdapter()
 
 @Controller("api/posts")
 export class PostsController {
@@ -138,21 +140,8 @@ export class PostsController {
             orderBy: { createdAt: "desc" },
         })
 
-        const entities = comments.map(
-            (comment) =>
-                new CommentEntity(
-                    comment.id,
-                    comment.postId,
-                    comment.content,
-                    comment.createdAt,
-                    comment.updatedAt,
-                    comment.source,
-                    "approved",
-                    comment.content.length > 80 ? 70 : 45,
-                    comment.content.length % 2 === 0,
-                    "es",
-                    { chars: comment.content.length, source: comment.source },
-                ),
+        const entities = comments.map((comment) =>
+            CommentFactory.fromDb(comment),
         )
 
         return {
@@ -243,17 +232,7 @@ export class PostsController {
             },
         })
 
-        const entity = new LikeEntity(
-            like.id,
-            like.postId,
-            like.reactionType,
-            like.weight,
-            like.source,
-            like.createdAt,
-            like.weight > 2 ? "strong" : "normal",
-            true,
-            { from: "manual", r: like.reactionType },
-        )
+        const entity = LikeFactory.fromDb(like)
 
         logDomainEvent("like.created", { postId: id, likeId: like.id })
         fakeSendNotification("like", { postId: id, reactionType })
