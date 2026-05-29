@@ -3,6 +3,7 @@ import {
     Body,
     Controller,
     Get,
+    Inject,
     NotFoundException,
     Param,
     ParseIntPipe,
@@ -12,7 +13,10 @@ import {
 import { CommentEntity } from "@/posts/entities/comment.entity"
 import { LikeEntity } from "@/posts/entities/like.entity"
 import { PostEntity } from "@/posts/entities/post.entity"
-import { legacyModerationApi } from "@/posts/legacy-moderation.client"
+import {
+    CONTENT_MODERATOR,
+    ContentModerator,
+} from "@/posts/moderation/content-moderator.interface"
 import { PrismaService } from "@/prisma/prisma.service"
 
 import { PostsService } from "@/posts/posts.service"
@@ -48,6 +52,8 @@ export class PostsController {
         private readonly postsService: PostsService,
         private readonly prisma: PrismaService,
         private readonly rankingService: RankingService,
+        @Inject(CONTENT_MODERATOR)
+        private readonly moderator: ContentModerator,
     ) {}
 
     @Post()
@@ -199,22 +205,9 @@ export class PostsController {
             throw new BadRequestException("Comment too short")
         }
 
-        // Cliente legacy: devuelve tipos mixtos (string/number/object).
-        const moderation = legacyModerationApi.review(body.content)
-
-        let blocked = false
-
-        if (moderation === "BLOCK") {
-            blocked = true
-        } else if (typeof moderation === "number") {
-            blocked = moderation < 1
-        } else if (typeof moderation === "object") {
-            blocked = !("pass" in moderation && moderation.pass)
-        } else if (moderation === "OK") {
-            blocked = false
-        }
-
-        if (blocked) {
+        // Patrón Adapter: el moderador expone una interfaz uniforme; el detalle
+        // de los tipos mixtos del cliente legacy queda oculto tras el adaptador.
+        if (this.moderator.isBlocked(body.content)) {
             throw new BadRequestException("Comment blocked by moderation")
         }
 
@@ -238,7 +231,7 @@ export class PostsController {
             created.content.length > 60 ? 80 : 40,
             false,
             "es",
-            { moderation, source: "legacy" },
+            { moderation: "approved", source: "legacy" },
         )
 
         logDomainEvent("comment.created", { postId: id, commentId: created.id })
