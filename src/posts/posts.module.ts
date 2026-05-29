@@ -1,9 +1,30 @@
-import { Module } from "@nestjs/common"
-import { PostsController } from "@/posts/posts.controller"
-import { PostsService } from "@/posts/posts.service"
+import { Module } from '@nestjs/common';
+import { PostsController } from './posts.controller';
+import { PostsService } from './posts.service';
+import { PrismaModule } from '../prisma/prisma.module';
+import {
+  PostSubject,
+  LogObserver,
+  NotificationObserver,
+  RecomputeObserver
+} from './posts.observer';
+import { PostFactory } from './posts.factory';
+import { LegacyModerationAdapter } from './moderation.adapter';
+import { NotificacionesObserverAdapter } from './notificaciones-observer.adapter';
+import { NotificacionesModule } from '../notificaciones/notificaciones.module';
 
 @Module({
-    controllers: [PostsController],
-    providers: [PostsService],
+  imports: [PrismaModule, NotificacionesModule],
+  controllers: [PostsController],
+  providers: [
+    PostsService,
+    PostFactory,
+    LegacyModerationAdapter,
+    PostSubject,
+    LogObserver,
+    NotificationObserver,
+    RecomputeObserver,
+    NotificacionesObserverAdapter,
+  ],
 })
 export class PostsModule {}
