@@ -1,184 +1,120 @@
-# AC_05 — Design Patterns: Problemas Identificados y Soluciones
+# Patrones de Diseño Aplicados en la API
 
-## Integrantes y división del trabajo
+En esta actividad, se han identificado falencias en la arquitectura de la lógica de servidor y se han resuelto aplicando distintos Patrones de Diseño, cumpliendo con los tres tipos (Creacional, Estructural y de Comportamiento) para mejorar la calidad del código, hacerlo más mantenible y respetar principios SOLID.
 
-| Integrante | Capa | Archivos |
-|---|---|---|
-| Integrante 1 (Frontend) | Lógica UI | `public/index.js`, `public/store.js`, `public/post-card.factory.js`, `public/validators.js` |
-| Integrante 2 (Frontend) | Capa API | `public/posts-api.js` |
-| Integrante 3 (Backend) | — | `src/posts/**` |
-| Integrante 4 (Backend) | — | `src/posts/**` |
+## Patrones Preexistentes
 
----
+El código original ya incluía dos patrones implementados:
 
-## Frontend — Integrante 1
+1. **Strategy (Comportamiento):** Implementado en `RankingService` (`src/posts/ranking/ranking.service.ts`) para separar la lógica de algoritmos de ordenamiento (Latest, Top, Controversial). De este modo, la API delega el cómo ordenar el Feed sin llenar el controlador con condicionales pesados.
+2. **Adapter (Estructural):** Implementado en la integración con el servicio externo `LegacyModerationAdapter` (`src/posts/moderation/legacy-moderation.adapter.ts`). Este patrón unificaba las distintas interfaces que un sistema antiguo pudiese tener detrás de un puerto limpio `ContentModerator`.
 
-### Problema 1: Construcción imperativa de tarjetas (God Function)
-
-**Descripción:**  
-`renderFeed` concentraba más de 100 líneas construyendo el DOM de cada tarjeta de post de forma completamente inline. Incluía la creación de imagen, título, descripción, estadísticas, lista de comentarios y formulario de comentario, todo mezclado. Cualquier cambio estructural en una tarjeta requería navegar y modificar esa función gigante.
-
-**Antes:**
-```js
-state.posts.forEach((post) => {
-    const card = document.createElement("article")
-    const image = document.createElement("img")
-    image.className = "h-72 w-full object-cover bg-zinc-200"
-    image.src = post.imageUrl
-    // ... ~80 líneas más de construcción DOM ...
-    feedElement.appendChild(card)
-})
-```
-
-**Patrón aplicado: Factory (Creacional)**
-
-Se extrae toda la construcción al `PostCardFactory`. El factory expone un único punto de entrada público (`create`) y oculta los detalles de construcción en métodos privados. `renderFeed` solo declara _qué_ renderizar; el factory decide _cómo_.
-
-**Después:**
-```js
-posts.forEach((post) => {
-    const card = PostCardFactory.create(post, {
-        comments: commentsByPost[post.id] || [],
-        onLike: handleLike,
-        onComment: handleComment,
-    })
-    feedElement.appendChild(card)
-})
-```
-
-**Diagrama:**
-```
-PostCardFactory
-    ├── create(post, opts): HTMLElement     ← único punto de entrada público
-    ├── #buildImage(post)
-    ├── #buildBody(post, comments, ...)
-    │       ├── #buildTitle(title)
-    │       ├── #buildDescription(description)
-    │       ├── #buildStats(post, onLike)
-    │       └── #buildCommentsSection(postId, comments, onComment)
-    │               └── #buildCommentForm(postId, onComment)
-    └── (todos los métodos internos son privados)
-```
+A pesar de contar con estos patrones, identificamos problemas graves en el `PostsController`. A continuación, se detallan los problemas y las soluciones implementadas mediante la inserción de nuevos patrones.
 
 ---
 
-### Problema 2: Estado mutable acoplado al render manual
+## 1. Problema: Constructores Telescópicos (Code Smell)
 
-**Descripción:**  
-`state` era un objeto plano mutado directamente desde múltiples lugares. Cada función que cambiaba datos debía acordarse de llamar `renderFeed()` después. Si se agregaba un nuevo flujo que modificara el estado sin llamar a render, la UI quedaba desactualizada de forma silenciosa.
+**Falla identificada:**
+Las entidades devueltas en la API como `PostEntity`, `CommentEntity` y `LikeEntity` poseían constructores gigantescos (ej: `PostEntity` tenía 14 parámetros posicionales). Esto producía un "Telescoping Constructor" anti-pattern dentro de los métodos del controlador (por ejemplo en `getFeed`), resultando en código altamente ilegible, propenso a errores al inyectar valores en el orden equivocado, y forzando al controlador a conocer los detalles íntimos de construcción de cada entidad.
 
-**Antes:**
-```js
-const state = { posts: [], commentsByPost: {}, mode: "latest" }
+### Solución: Patrón Builder (Creacional)
+Se implementaron constructores fluídos utilizando el patrón **Builder** para encapsular y simplificar el proceso de construcción de las entidades paso a paso. 
 
-state.posts = feedRows
-state.commentsByPost = {}
-renderFeed() // hay que acordarse de este llamado en cada lugar
+**Clases creadas:**
+- `PostBuilder` (`src/posts/entities/post.builder.ts`)
+- `CommentBuilder` (`src/posts/entities/comment.builder.ts`)
+- `LikeBuilder` (`src/posts/entities/like.builder.ts`)
+
+**Ejemplo de refactorización en `PostsController`:**
+
+*Antes (Constructor Telescópico):*
+```typescript
+return new PostEntity(
+    post.id,
+    post.title,
+    post.description,
+    post.imageUrl,
+    post.createdAt,
+    post.updatedAt,
+    likesCount,
+    commentsCount,
+    relevanceScore,
+    relevanceScore > 20,
+    "feed-controller",
+    tags,
+    metadata,
+    mode,
+)
 ```
 
-**Patrón aplicado: Observer (Comportamiento)**
-
-`Store` es el Sujeto. Mantiene el estado y notifica a los Observadores suscritos automáticamente en cada `setState`. `renderFeed` se suscribe una sola vez al inicio; después nunca necesita ser llamada directamente.
-
-**Después:**
-```js
-const store = new Store({ posts: [], commentsByPost: {}, mode: "latest" })
-
-store.subscribe(renderFeed) // suscripción única al inicio
-
-store.setState(() => ({ posts: feedRows, commentsByPost }))
-// ↑ renderFeed se invoca automáticamente
-```
-
-**Diagrama:**
-```
-Store (Sujeto)
-    ├── #state: { posts, commentsByPost, mode }
-    ├── #listeners: Function[]
-    ├── subscribe(fn)
-    ├── setState(updater)
-    │       └── notifica #listeners
-    └── getState()
-                        ▼
-                renderFeed (Observador)
-                recibe el estado completo
-                y reconstruye el DOM
+*Después (Builder):*
+```typescript
+return new PostBuilder()
+    .setId(post.id)
+    .setTitle(post.title)
+    .setDescription(post.description)
+    .setImageUrl(post.imageUrl)
+    .setTimestamps(post.createdAt, post.updatedAt)
+    .setMetrics(likesCount, commentsCount)
+    .setRelevance(relevanceScore, relevanceScore > 20)
+    .setSourceInfo("feed-controller")
+    .setTags(tags)
+    .setMetadata(metadata)
+    .setRankingMode(mode)
+    .build()
 ```
 
 ---
 
-### Problema 3: Validación inline y dispersa
+## 2. Problema: Acoplamiento de Funcionalidades Transversales
 
-**Descripción:**  
-Las reglas de validación estaban incrustadas directamente en los handlers. `handleCreatePost` validaba campos inline y el listener del comentario validaba el largo inline. Agregar un tercer formulario implicaba duplicar el mismo patrón.
+**Falla identificada:**
+Dentro de los métodos `create`, `createComment`, y `addLike` del `PostsController`, existía un fuerte acoplamiento a lógicas externas (Domain Events, Notificaciones y Re-cálculos de índices). 
+Se repetían líneas idénticas en todas las funciones:
+```typescript
+logDomainEvent("...", { ... })
+fakeSendNotification("...", { ... })
+fakeRecomputeSomething(...)
+```
+El controlador rompía el principio de Responsabilidad Única (SRP), sabiendo exactamente qué eventos y acciones accesorias debían dispararse tras cada mutación de datos.
 
-**Antes:**
-```js
-// En handleCreatePost:
-if (!payload.title || !payload.description || !payload.imageUrl) {
-    throw new Error("Completa todos los campos")
-}
-if (!isValidHttpUrl(payload.imageUrl)) {
-    throw new Error("La URL de imagen debe ser valida")
-}
+### Solución: Patrón Facade (Estructural) / Observer
+Se encapsuló toda esta lógica de eventos transversales detrás de una única **Facade**.
 
-// En el listener del comentario:
-if (content.length < 2) {
-    renderError("Comment too short")
-    return
-}
+**Clase creada:**
+- `PostEventsFacade` (`src/posts/events.facade.ts`)
+
+La Facade abstrae los múltiples subsistemas de notificaciones y eventos de dominio y provee una interfaz simplificada para el controlador. Ahora el controlador delega completamente estas operaciones.
+
+**Ejemplo de refactorización:**
+
+*Antes:*
+```typescript
+const created = await this.postsService.create(body)
+
+logDomainEvent("post.created", { postId: created.id, title: created.title })
+fakeSendNotification("post", { postId: created.id })
+fakeRecomputeSomething(created.id)
+
+return { ok: true, payload: created }
 ```
 
-**Patrón aplicado: Strategy (Comportamiento)**
+*Después:*
+```typescript
+const created = await this.postsService.create(body)
 
-Cada tipo de formulario tiene su propia Estrategia con interfaz uniforme `validate(payload)`. El handler solo invoca `validate()` y la estrategia lanza el error si corresponde.
+this.eventsFacade.dispatchPostCreated(created.id, created.title)
 
-**Después:**
-```js
-PostValidationStrategy.validate(payload)       // en handleCreatePost
-CommentValidationStrategy.validate({ content }) // en handleComment
-```
-
-**Diagrama:**
-```
-«interfaz implícita»
-ValidationStrategy
-    └── validate(payload: object): void | throws Error
-              │
-    ┌─────────┴──────────────────────────┐
-    │                                    │
-PostValidationStrategy       CommentValidationStrategy
-    ├── verifica campos presentes            └── verifica largo mínimo
-    └── verifica URL http/https
+return { ok: true, payload: created }
 ```
 
 ---
 
-## Frontend — Integrante 2
+## Conclusión
 
-> _Pendiente de completar por el integrante 2._
-
----
-
-## Backend — Integrante 3
-
-> _Pendiente de completar por el integrante 3._
-
----
-
-## Backend — Integrante 4
-
-> _Pendiente de completar por el integrante 4._
-
----
-
-## Resumen general
-
-| Patrón | Categoría | Ubicación | Integrante | Estado |
-|---|---|---|---|---|
-| **Factory** | Creacional | `PostCardFactory` — construcción de tarjetas DOM | 1 | ✅ |
-| **Observer** | Comportamiento | `Store` — sincronización estado → UI | 1 | ✅ |
-| **Strategy** | Comportamiento | `PostValidationStrategy`, `CommentValidationStrategy` | 1 | ✅ |
-| — | — | — | 2 | 🔲 |
-| — | — | — | 3 | 🔲 |
-| — | — | — | 4 | 🔲 |
+Mediante la implementación de estos patrones, logramos:
+1. **Completar los 3 tipos de patrones** vistos en clase (Creacional: Builder, Estructural: Adapter/Facade, Comportamiento: Strategy).
+2. **Reducir significativamente la carga del `PostsController`**, convirtiéndolo en un mediador limpio que coordina los servicios y builders.
+3. Mejorar la extensibilidad (agregar nuevos campos a una entidad ahora es más fácil con el Builder).
+4. Proveer un sistema aislado y cohesivo para manejar acciones asincrónicas secundarias a través de la Facade.

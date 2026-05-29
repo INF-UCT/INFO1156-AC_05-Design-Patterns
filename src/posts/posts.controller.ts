@@ -10,10 +10,12 @@ import {
     Post,
     Query,
 } from "@nestjs/common"
-import { CommentEntityBuilder } from "@/posts/entities/builders/comment-entity.builder"
-import { LikeEntityBuilder } from "@/posts/entities/builders/like-entity.builder"
-import { PostEntityBuilder } from "@/posts/entities/builders/post-entity.builder"
-import { DomainEventPublisher } from "@/posts/events/domain-event.publisher"
+import { CommentEntity } from "@/posts/entities/comment.entity"
+import { LikeEntity } from "@/posts/entities/like.entity"
+import { PostEntity } from "@/posts/entities/post.entity"
+import { PostBuilder } from "@/posts/entities/post.builder"
+import { CommentBuilder } from "@/posts/entities/comment.builder"
+import { LikeBuilder } from "@/posts/entities/like.builder"
 import {
     CONTENT_MODERATOR,
     ContentModerator,
@@ -22,6 +24,7 @@ import { PrismaService } from "@/prisma/prisma.service"
 
 import { PostsService } from "@/posts/posts.service"
 import { RankingService } from "@/posts/ranking/ranking.service"
+import { PostEventsFacade } from "@/posts/events.facade"
 import {
     AddLikeDto,
     CreateCommentDto,
@@ -37,7 +40,7 @@ export class PostsController {
         private readonly rankingService: RankingService,
         @Inject(CONTENT_MODERATOR)
         private readonly moderator: ContentModerator,
-        private readonly events: DomainEventPublisher,
+        private readonly eventsFacade: PostEventsFacade,
     ) {}
 
     @Post()
@@ -54,10 +57,8 @@ export class PostsController {
 
         const created = await this.postsService.create(body)
 
-        this.events.publish({
-            name: "post.created",
-            payload: { postId: created.id, title: created.title },
-        })
+        // Patrón Facade: Se oculta la complejidad del despacho de eventos
+        this.eventsFacade.dispatchPostCreated(created.id, created.title)
 
         return {
             ok: true,
@@ -109,21 +110,19 @@ export class PostsController {
                 hourOfCreate: new Date(post.createdAt).getHours(),
             }
 
-            return new PostEntityBuilder()
-                .withId(post.id)
-                .withTitle(post.title)
-                .withDescription(post.description)
-                .withImageUrl(post.imageUrl)
-                .withCreatedAt(post.createdAt)
-                .withUpdatedAt(post.updatedAt)
-                .withLikesCount(likesCount)
-                .withCommentsCount(commentsCount)
-                .withRelevanceScore(relevanceScore)
-                .withIsFeatured(relevanceScore > 20)
-                .withSource("feed-controller")
-                .withTags(tags)
-                .withMetadata(metadata)
-                .withRankingMode(mode)
+            // Patrón Builder: Creación fluida de la entidad evitando constructores con muchos parámetros
+            return new PostBuilder()
+                .setId(post.id)
+                .setTitle(post.title)
+                .setDescription(post.description)
+                .setImageUrl(post.imageUrl)
+                .setTimestamps(post.createdAt, post.updatedAt)
+                .setMetrics(likesCount, commentsCount)
+                .setRelevance(relevanceScore, relevanceScore > 20)
+                .setSourceInfo("feed-controller")
+                .setTags(tags)
+                .setMetadata(metadata)
+                .setRankingMode(mode)
                 .build()
         })
 
@@ -150,24 +149,18 @@ export class PostsController {
             orderBy: { createdAt: "desc" },
         })
 
-        const entities = comments.map(
-            (comment) =>
-                new CommentEntityBuilder()
-                    .withId(comment.id)
-                    .withPostId(comment.postId)
-                    .withContent(comment.content)
-                    .withCreatedAt(comment.createdAt)
-                    .withUpdatedAt(comment.updatedAt)
-                    .withSource(comment.source)
-                    .withModerationState("approved")
-                    .withSentimentScore(comment.content.length > 80 ? 70 : 45)
-                    .withIsPinned(comment.content.length % 2 === 0)
-                    .withLanguage("es")
-                    .withMetadata({
-                        chars: comment.content.length,
-                        source: comment.source,
-                    })
-                    .build(),
+        const entities = comments.map((comment) =>
+            new CommentBuilder()
+                .setId(comment.id)
+                .setPostId(comment.postId)
+                .setContent(comment.content)
+                .setTimestamps(comment.createdAt, comment.updatedAt)
+                .setSource(comment.source)
+                .setModerationInfo("approved", comment.content.length > 80 ? 70 : 45)
+                .setIsPinned(comment.content.length % 2 === 0)
+                .setLanguage("es")
+                .setMetadata({ chars: comment.content.length, source: comment.source })
+                .build(),
         )
 
         return {
@@ -205,24 +198,19 @@ export class PostsController {
             },
         })
 
-        const entity = new CommentEntityBuilder()
-            .withId(created.id)
-            .withPostId(created.postId)
-            .withContent(created.content)
-            .withCreatedAt(created.createdAt)
-            .withUpdatedAt(created.updatedAt)
-            .withSource(created.source)
-            .withModerationState("approved")
-            .withSentimentScore(created.content.length > 60 ? 80 : 40)
-            .withIsPinned(false)
-            .withLanguage("es")
-            .withMetadata({ moderation: "approved", source: "legacy" })
+        const entity = new CommentBuilder()
+            .setId(created.id)
+            .setPostId(created.postId)
+            .setContent(created.content)
+            .setTimestamps(created.createdAt, created.updatedAt)
+            .setSource(created.source)
+            .setModerationInfo("approved", created.content.length > 60 ? 80 : 40)
+            .setIsPinned(false)
+            .setLanguage("es")
+            .setMetadata({ moderation: "approved", source: "legacy" })
             .build()
 
-        this.events.publish({
-            name: "comment.created",
-            payload: { postId: id, commentId: created.id },
-        })
+        this.eventsFacade.dispatchCommentCreated(id, created.id)
 
         return {
             message: "comment_created",
@@ -256,22 +244,17 @@ export class PostsController {
             },
         })
 
-        const entity = new LikeEntityBuilder()
-            .withId(like.id)
-            .withPostId(like.postId)
-            .withReactionType(like.reactionType)
-            .withWeight(like.weight)
-            .withSource(like.source)
-            .withCreatedAt(like.createdAt)
-            .withStrengthLabel(like.weight > 2 ? "strong" : "normal")
-            .withShouldAffectRelevanceScore(true)
-            .withMetadata({ from: "manual", r: like.reactionType })
+        const entity = new LikeBuilder()
+            .setId(like.id)
+            .setPostId(like.postId)
+            .setReactionInfo(like.reactionType, like.weight)
+            .setSource(like.source)
+            .setCreatedAt(like.createdAt)
+            .setStrengthAndRelevance(like.weight > 2 ? "strong" : "normal", true)
+            .setMetadata({ from: "manual", r: like.reactionType })
             .build()
 
-        this.events.publish({
-            name: "like.created",
-            payload: { postId: id, likeId: like.id, reactionType },
-        })
+        this.eventsFacade.dispatchLikeAdded(id, like.id, reactionType)
 
         return {
             success: true,
